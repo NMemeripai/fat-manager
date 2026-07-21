@@ -1,0 +1,1941 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+<title>FAT Manager</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root[data-theme="light"]{
+  /* brand */
+  --accent:#2563EB; --accent-2:#1E40AF; --accent-soft:#DBEAFE; --accent-softer:#EFF6FF;
+  /* surfaces */
+  --bg:#F8FAFC; --surface:#FFFFFF; --surface-2:#F1F5F9; --border:#E5E7EB; --border-strong:#D1D5DB;
+  /* text */
+  --text:#111827; --text-2:#6B7280; --text-3:#9CA3AF;
+  /* status */
+  --green:#22C55E; --green-soft:#DCFCE7; --green-2:#16A34A;
+  --amber:#F59E0B; --amber-soft:#FEF3C7; --amber-2:#B45309;
+  --red:#EF4444; --red-soft:#FEE2E2; --red-2:#DC2626;
+  /* elevation */
+  --shadow-xs:0 1px 2px rgba(17,24,39,.04);
+  --shadow-sm:0 1px 3px rgba(30,41,89,.06), 0 1px 2px rgba(30,41,89,.04);
+  --shadow-md:0 4px 12px rgba(30,41,89,.08), 0 2px 4px rgba(30,41,89,.04);
+  --shadow-lg:0 12px 32px rgba(30,41,89,.14), 0 4px 10px rgba(30,41,89,.06);
+  --shadow: var(--shadow-sm);
+  --ring: 0 0 0 3.5px rgba(37,99,235,.14);
+}
+:root[data-theme="dark"]{
+  --accent:#60A5FA; --accent-2:#3B82F6; --accent-soft:#1E3A6B; --accent-softer:#16233F;
+  --bg:#0B1220; --surface:#111A2C; --surface-2:#17223A; --border:#22304C; --border-strong:#2E3F60;
+  --text:#EEF2FA; --text-2:#9AA7C2; --text-3:#6B7A99;
+  --green:#4ADE80; --green-soft:#123321; --green-2:#22C55E;
+  --amber:#FBBF24; --amber-soft:#3A2A0C; --amber-2:#F59E0B;
+  --red:#F87171; --red-soft:#3A1518; --red-2:#EF4444;
+  --shadow-xs:0 1px 2px rgba(0,0,0,.3);
+  --shadow-sm:0 1px 3px rgba(0,0,0,.4);
+  --shadow-md:0 4px 14px rgba(0,0,0,.45);
+  --shadow-lg:0 16px 40px rgba(0,0,0,.55);
+  --shadow: var(--shadow-sm);
+  --ring: 0 0 0 3.5px rgba(96,165,250,.22);
+}
+:root{
+  --r-lg:16px; --r-md:12px; --r-sm:8px; --r-pill:999px;
+  --ease:cubic-bezier(.4,0,.2,1);
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+  transition:background .2s var(--ease), color .2s var(--ease);
+}
+h1,h2,h3,h4{margin:0; font-weight:700; letter-spacing:-0.015em; font-family:'Plus Jakarta Sans','Inter',sans-serif;}
+p{margin:0;}
+a{color:inherit;}
+button{font-family:inherit; cursor:pointer;}
+input,select,textarea{font-family:inherit; font-size:14px;}
+*:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+::-webkit-scrollbar{width:10px; height:10px;}
+::-webkit-scrollbar-thumb{background:var(--border-strong); border-radius:8px;}
+::-webkit-scrollbar-thumb:hover{background:var(--text-3);}
+@media (prefers-reduced-motion: reduce){ *{animation-duration:.01ms !important; transition-duration:.01ms !important;} }
+
+@keyframes fadeIn{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
+@keyframes scaleIn{from{opacity:0; transform:scale(.97) translateY(6px);} to{opacity:1; transform:scale(1) translateY(0);}}
+@keyframes shimmer{0%{background-position:-400px 0;} 100%{background-position:400px 0;}}
+@keyframes slideInRight{from{opacity:0; transform:translateX(16px);} to{opacity:1; transform:translateX(0);}}
+@keyframes spin{to{transform:rotate(360deg);}}
+@keyframes pulseDot{0%,100%{opacity:1;} 50%{opacity:.4;}}
+
+.fade-in{animation:fadeIn .35s var(--ease);}
+
+/* ---------- skeleton / loader ---------- */
+.skel{
+  background:linear-gradient(90deg, var(--surface-2) 25%, var(--border) 37%, var(--surface-2) 63%);
+  background-size:400px 100%; animation:shimmer 1.4s infinite linear; border-radius:var(--r-sm);
+}
+.boot-screen{min-height:100vh; background:var(--bg); display:flex;}
+.boot-sidebar{width:232px; background:var(--surface); border-right:1px solid var(--border); padding:20px;}
+.boot-main{flex:1; padding:24px 28px;}
+.boot-topbar{height:58px; background:var(--surface); border-bottom:1px solid var(--border); margin:-24px -28px 24px; display:flex; align-items:center; padding:0 20px;}
+.spinner{width:16px; height:16px; border-radius:50%; border:2px solid rgba(255,255,255,.35); border-top-color:#fff; animation:spin .7s linear infinite; display:inline-block;}
+.spinner-accent{border:2px solid var(--accent-soft); border-top-color:var(--accent);}
+
+/* ---------- icons ---------- */
+.icon{width:18px; height:18px; flex-shrink:0; stroke:currentColor; stroke-width:1.8; fill:none; stroke-linecap:round; stroke-linejoin:round; vertical-align:-4px;}
+.icon-sm{width:15px; height:15px;}
+.icon-lg{width:22px; height:22px;}
+
+/* ---------- layout ---------- */
+#app{min-height:100vh;}
+.shell{display:flex; min-height:100vh;}
+.sidebar{
+  width:232px; flex-shrink:0; background:var(--surface); border-right:1px solid var(--border);
+  display:flex; flex-direction:column; position:sticky; top:0; height:100vh; transition:background .2s var(--ease);
+}
+.brand{padding:22px 18px 16px; display:flex; align-items:center; gap:10px;}
+.brand-mark{width:32px; height:32px; border-radius:var(--r-sm); background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; font-family:'Plus Jakarta Sans',sans-serif; box-shadow:var(--shadow-sm);}
+.brand-name{font-weight:750; font-size:15px; font-family:'Plus Jakarta Sans',sans-serif;}
+.brand-sub{font-size:11px; color:var(--text-3); margin-top:-1px;}
+.nav{flex:1; padding:10px 12px; overflow-y:auto;}
+.nav-item{
+  display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:var(--r-sm); color:var(--text-2);
+  font-size:13.5px; font-weight:550; margin-bottom:2px; transition:background .15s var(--ease), color .15s var(--ease), transform .1s;
+  position:relative;
+}
+.nav-item:hover{background:var(--surface-2); color:var(--text);}
+.nav-item:active{transform:scale(.98);}
+.nav-item.active{background:var(--accent-softer); color:var(--accent); font-weight:700;}
+.nav-item.active .icon{stroke:var(--accent);}
+.nav-icon{display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+.nav-section-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3); padding:16px 12px 7px; font-weight:700;}
+.sidebar-foot{padding:12px; border-top:1px solid var(--border);}
+.user-chip{display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:var(--r-sm); transition:background .15s var(--ease);}
+.user-chip:hover{background:var(--surface-2);}
+.avatar{width:29px; height:29px; border-radius:50%; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0;}
+.user-meta{overflow:hidden;}
+.user-name{font-size:13px; font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.user-role{font-size:11px; color:var(--text-3);}
+
+.main{flex:1; min-width:0;}
+.topbar{
+  height:58px; border-bottom:1px solid var(--border); background:rgba(255,255,255,.72); backdrop-filter:blur(10px); display:flex; align-items:center;
+  gap:12px; padding:0 20px; position:sticky; top:0; z-index:20;
+}
+:root[data-theme="dark"] .topbar{background:rgba(17,26,44,.72);}
+.search-wrap{flex:1; max-width:420px; position:relative;}
+.search-input{
+  width:100%; padding:8px 12px 8px 34px; border-radius:var(--r-md); border:1px solid var(--border); background:var(--surface-2);
+  color:var(--text); outline:none; transition:border-color .15s var(--ease), box-shadow .15s var(--ease), background .15s var(--ease);
+}
+.search-input:focus{border-color:var(--accent); background:var(--surface); box-shadow:var(--ring);}
+.search-icon{position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--text-3); display:flex;}
+.topbar-spacer{flex:1;}
+.icon-btn{
+  width:34px; height:34px; border-radius:var(--r-sm); border:1px solid var(--border); background:var(--surface);
+  display:flex; align-items:center; justify-content:center; color:var(--text-2); position:relative; transition:background .15s var(--ease), border-color .15s var(--ease), transform .1s, color .15s;
+}
+.icon-btn:hover{background:var(--surface-2); color:var(--text); border-color:var(--border-strong);}
+.icon-btn:active{transform:scale(.94);}
+.badge-dot{position:absolute; top:-4px; right:-4px; background:var(--red); color:#fff; font-size:9.5px; font-weight:700; border-radius:9px; min-width:16px; height:16px; display:flex; align-items:center; justify-content:center; padding:0 3px; border:2px solid var(--surface);}
+.content{padding:26px 30px 64px; max-width:1360px;}
+
+/* ---------- generic components ---------- */
+.page-head{display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:22px; gap:12px; flex-wrap:wrap;}
+.page-title{font-size:22px;}
+.page-sub{color:var(--text-2); font-size:13px; margin-top:4px;}
+.btn{
+  border:1px solid var(--border); background:var(--surface); color:var(--text); padding:8.5px 15px; border-radius:var(--r-sm);
+  font-size:13.5px; font-weight:600; display:inline-flex; align-items:center; gap:7px; transition:all .15s var(--ease);
+  box-shadow:var(--shadow-xs);
+}
+.btn:hover{background:var(--surface-2); border-color:var(--border-strong); transform:translateY(-1px); box-shadow:var(--shadow-sm);}
+.btn:active{transform:translateY(0) scale(.98);}
+.btn-primary{background:var(--accent); border-color:var(--accent); color:#fff; box-shadow:0 1px 2px rgba(37,99,235,.15), 0 2px 8px rgba(37,99,235,.18);}
+.btn-primary:hover{background:var(--accent-2); border-color:var(--accent-2); box-shadow:0 2px 4px rgba(37,99,235,.2), 0 6px 16px rgba(37,99,235,.24);}
+.btn-danger{color:var(--red); border-color:var(--red-soft);}
+.btn-danger:hover{background:var(--red-soft); border-color:var(--red);}
+.btn-sm{padding:6px 11px; font-size:12.5px; border-radius:var(--r-sm);}
+.btn-ghost{border-color:transparent; background:transparent; box-shadow:none;}
+.btn-ghost:hover{background:var(--surface-2); box-shadow:none; transform:none;}
+.btn:disabled{opacity:.5; cursor:not-allowed; transform:none !important;}
+
+.grid-cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:24px;}
+.card{background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); padding:18px 20px; box-shadow:var(--shadow-sm); transition:box-shadow .2s var(--ease), transform .2s var(--ease); animation:fadeIn .35s var(--ease);}
+.card:hover{box-shadow:var(--shadow-md); transform:translateY(-2px);}
+.stat-label{font-size:12px; color:var(--text-2); font-weight:650; display:flex; align-items:center; gap:7px;}
+.stat-icon{width:26px; height:26px; border-radius:var(--r-sm); display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+.stat-value{font-size:27px; font-weight:750; margin-top:10px; letter-spacing:-0.02em; font-family:'Plus Jakarta Sans',sans-serif;}
+.stat-foot{font-size:11.5px; color:var(--text-3); margin-top:5px; display:flex; align-items:center; gap:5px;}
+
+.section-card{background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); padding:20px 22px; margin-bottom:18px; box-shadow:var(--shadow-sm); animation:fadeIn .35s var(--ease);}
+.section-card h3{font-size:14.5px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; font-family:'Plus Jakarta Sans',sans-serif;}
+
+.table-wrap{overflow-x:auto; border:1px solid var(--border); border-radius:var(--r-lg); background:var(--surface); box-shadow:var(--shadow-sm);}
+table{width:100%; border-collapse:collapse; font-size:13.5px;}
+thead th{
+  text-align:left; padding:12px 16px; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3);
+  border-bottom:1px solid var(--border); background:var(--surface-2); white-space:nowrap; font-weight:700; user-select:none;
+}
+thead th.sortable{cursor:pointer; transition:color .15s var(--ease);}
+thead th.sortable:hover{color:var(--accent);}
+.sort-arrow{display:inline-block; margin-left:4px; opacity:.5; font-size:10px;}
+.sort-arrow.active{opacity:1; color:var(--accent);}
+tbody td{padding:12px 16px; border-bottom:1px solid var(--border); vertical-align:middle;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr{transition:background .12s var(--ease);}
+tbody tr.clickable:hover{background:var(--accent-softer); cursor:pointer;}
+.cell-strong{font-weight:650;}
+.cell-muted{color:var(--text-3);}
+.table-foot{display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-top:1px solid var(--border); flex-wrap:wrap; gap:10px;}
+.pager{display:flex; align-items:center; gap:4px;}
+.pager-btn{width:28px; height:28px; border-radius:var(--r-sm); border:1px solid var(--border); background:var(--surface); display:flex; align-items:center; justify-content:center; color:var(--text-2); font-size:12px; transition:all .15s var(--ease);}
+.pager-btn:hover:not(:disabled){background:var(--surface-2); color:var(--text);}
+.pager-btn:disabled{opacity:.4; cursor:not-allowed;}
+.pager-btn.active{background:var(--accent); border-color:var(--accent); color:#fff;}
+
+.badge{display:inline-flex; align-items:center; gap:5px; padding:3.5px 10px; border-radius:var(--r-pill); font-size:11.5px; font-weight:650; line-height:1.3;}
+.badge-dot-ico{width:6px; height:6px; border-radius:50%; background:currentColor; flex-shrink:0;}
+.badge-green{background:var(--green-soft); color:var(--green-2);}
+.badge-amber{background:var(--amber-soft); color:var(--amber-2);}
+.badge-red{background:var(--red-soft); color:var(--red-2);}
+.badge-neutral{background:var(--surface-2); color:var(--text-2);}
+.badge-accent{background:var(--accent-soft); color:var(--accent-2);}
+
+.filters-row{display:flex; gap:9px; flex-wrap:wrap; margin-bottom:16px; align-items:center;}
+.select, .input, textarea.input{
+  border:1px solid var(--border); background:var(--surface); color:var(--text); padding:8px 11px; border-radius:var(--r-sm); outline:none;
+  transition:border-color .15s var(--ease), box-shadow .15s var(--ease);
+}
+.select:hover, .input:hover{border-color:var(--border-strong);}
+.select:focus, .input:focus{border-color:var(--accent); box-shadow:var(--ring);}
+.input.field-error{border-color:var(--red); box-shadow:0 0 0 3.5px rgba(239,68,68,.12);}
+.field-error-msg{color:var(--red); font-size:11.5px; margin-top:5px; font-weight:600; display:flex; align-items:center; gap:5px;}
+.field{margin-bottom:14px;}
+.field label{display:block; font-size:12px; font-weight:650; color:var(--text-2); margin-bottom:6px;}
+.field .input, .field select, .field textarea{width:100%;}
+.field-row{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+textarea{resize:vertical; min-height:72px;}
+input[type="date"]{color-scheme:light;}
+:root[data-theme="dark"] input[type="date"]{color-scheme:dark;}
+input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(80%) saturate(2000%) hue-rotate(211deg); cursor:pointer; border-radius:4px; padding:2px;}
+.file-drop{border:1.5px dashed var(--border-strong); border-radius:var(--r-md); padding:20px; text-align:center; color:var(--text-2); font-size:12.5px; cursor:pointer; transition:all .15s var(--ease); background:var(--surface-2);}
+.file-drop:hover{border-color:var(--accent); background:var(--accent-softer); color:var(--accent-2);}
+.file-drop .icon{margin:0 auto 6px; display:block;}
+.file-chip{display:inline-flex; align-items:center; gap:6px; background:var(--accent-softer); color:var(--accent-2); padding:5px 10px; border-radius:var(--r-pill); font-size:12px; font-weight:600; margin-top:8px;}
+
+.empty-state{padding:48px 20px; text-align:center; color:var(--text-3);}
+.empty-state .em-icon{width:52px; height:52px; border-radius:50%; background:var(--surface-2); color:var(--text-3); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;}
+.empty-state .em-title{color:var(--text-2); font-weight:650; font-size:13.5px; margin-bottom:4px;}
+
+/* modal */
+.modal-overlay{position:fixed; inset:0; background:rgba(15,23,42,.5); backdrop-filter:blur(2px); display:flex; align-items:flex-start; justify-content:center; padding:6vh 16px; z-index:100; overflow-y:auto; animation:fadeIn .18s var(--ease);}
+.modal{background:var(--surface); border-radius:var(--r-lg); width:100%; max-width:560px; box-shadow:var(--shadow-lg); border:1px solid var(--border); animation:scaleIn .22s var(--ease);}
+.modal.modal-wide{max-width:800px;}
+.modal.modal-sm{max-width:400px;}
+.modal-head{display:flex; align-items:center; justify-content:space-between; padding:18px 22px; border-bottom:1px solid var(--border);}
+.modal-head h3{font-size:16px;}
+.modal-body{padding:22px; max-height:70vh; overflow-y:auto;}
+.modal-foot{padding:15px 22px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:9px;}
+
+/* tabs */
+.tabs{display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:18px;}
+.tab{padding:9px 14px; font-size:13px; font-weight:650; color:var(--text-2); border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .15s var(--ease), border-color .15s var(--ease); display:flex; align-items:center; gap:6px;}
+.tab.active{color:var(--accent); border-color:var(--accent);}
+.tab:hover{color:var(--text);}
+
+/* timeline */
+.timeline{display:flex; gap:0; align-items:stretch; margin:12px 0 4px;}
+.tl-step{flex:1; display:flex; flex-direction:column; align-items:center; position:relative; padding-top:4px;}
+.tl-line{position:absolute; top:16px; left:-50%; width:100%; height:2px; background:var(--border); z-index:0; transition:background .2s var(--ease);}
+.tl-step:first-child .tl-line{display:none;}
+.tl-dot{width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; z-index:1; border:2px solid var(--border); background:var(--surface); color:var(--text-3); transition:all .2s var(--ease);}
+.tl-step.done .tl-dot{background:var(--green); border-color:var(--green); color:#fff; box-shadow:0 0 0 4px var(--green-soft);}
+.tl-step.current .tl-dot{background:var(--accent); border-color:var(--accent); color:#fff; box-shadow:0 0 0 4px var(--accent-soft);}
+.tl-step.done .tl-line{background:var(--green);}
+.tl-label{font-size:11.5px; font-weight:650; margin-top:8px; text-align:center;}
+.tl-sub{font-size:10.5px; color:var(--text-3); text-align:center;}
+
+/* bars & progress */
+.bar-row{display:flex; align-items:center; gap:10px; margin-bottom:11px;}
+.bar-label{width:150px; font-size:12.5px; color:var(--text-2); flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.bar-track{flex:1; height:8px; border-radius:var(--r-pill); background:var(--surface-2); overflow:hidden;}
+.bar-fill{height:100%; background:linear-gradient(90deg, var(--accent-2), var(--accent)); border-radius:var(--r-pill); transition:width .5s var(--ease);}
+.bar-val{width:34px; text-align:right; font-size:12px; color:var(--text-3); font-weight:600;}
+.ring-wrap{position:relative; width:88px; height:88px; flex-shrink:0;}
+.ring-wrap svg{transform:rotate(-90deg);}
+.ring-track{fill:none; stroke:var(--surface-2); stroke-width:8;}
+.ring-fill{fill:none; stroke:var(--accent); stroke-width:8; stroke-linecap:round; transition:stroke-dashoffset .6s var(--ease);}
+.ring-label{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-weight:750; font-size:17px; font-family:'Plus Jakarta Sans',sans-serif;}
+
+.kv{display:grid; grid-template-columns:130px 1fr; gap:7px 10px; font-size:13px;}
+.kv dt{color:var(--text-3);}
+.kv dd{margin:0; font-weight:600;}
+
+.notif-item{display:flex; gap:11px; padding:12px 15px; border-bottom:1px solid var(--border); transition:background .12s var(--ease);}
+.notif-item:hover{background:var(--surface-2);}
+.notif-item:last-child{border-bottom:none;}
+.notif-ico{width:30px; height:30px; border-radius:var(--r-sm); display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+.notif-text{font-size:12.5px;}
+.notif-title{font-weight:650; margin-bottom:1px;}
+.notif-sub{color:var(--text-3); font-size:11.5px;}
+
+.activity-item{display:flex; gap:11px; padding:10px 0; border-bottom:1px solid var(--border);}
+.activity-item:last-child{border-bottom:none; padding-bottom:0;}
+.activity-dot{width:8px; height:8px; border-radius:50%; background:var(--accent); margin-top:6px; flex-shrink:0;}
+.activity-text{font-size:12.5px; line-height:1.5;}
+.activity-time{font-size:11px; color:var(--text-3); margin-top:2px;}
+
+.login-wrap{min-height:100vh; display:flex; align-items:center; justify-content:center; background:radial-gradient(1200px 600px at 50% -10%, var(--accent-softer), var(--bg) 60%); padding:20px;}
+.login-card{width:100%; max-width:404px; background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:34px; box-shadow:var(--shadow-lg); animation:scaleIn .3s var(--ease);}
+.login-brand{display:flex; flex-direction:column; align-items:center; margin-bottom:24px; text-align:center;}
+.login-mark{width:48px; height:48px; border-radius:14px; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:18px; margin-bottom:12px; box-shadow:0 8px 20px rgba(37,99,235,.28); font-family:'Plus Jakarta Sans',sans-serif;}
+.demo-creds{margin-top:20px; padding:13px 15px; background:var(--surface-2); border-radius:var(--r-md); font-size:11.5px; color:var(--text-2); line-height:1.8;}
+.demo-creds code{background:var(--surface); padding:1.5px 6px; border-radius:5px; border:1px solid var(--border); font-weight:600;}
+.error-msg{background:var(--red-soft); color:var(--red-2); padding:9px 13px; border-radius:var(--r-sm); font-size:12.5px; margin-bottom:14px; font-weight:600; display:flex; align-items:center; gap:7px;}
+.help-text{font-size:11.5px; color:var(--text-3); margin-top:9px; line-height:1.6;}
+
+/* toasts */
+.toast-stack{position:fixed; bottom:22px; right:22px; z-index:200; display:flex; flex-direction:column; gap:10px; align-items:flex-end;}
+.toast{background:var(--surface); border:1px solid var(--border); box-shadow:var(--shadow-lg); padding:12px 16px; border-radius:var(--r-md); font-size:13px; font-weight:600; display:flex; align-items:center; gap:10px; min-width:240px; animation:slideInRight .25s var(--ease);}
+.toast-ico{width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+.toast.leaving{animation:fadeIn .2s var(--ease) reverse;}
+
+/* confirm dialog */
+.confirm-modal{max-width:380px;}
+.confirm-ico{width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-bottom:14px;}
+
+.mono-list{list-style:none; margin:0; padding:0;}
+.mono-list li{padding:10px 0; border-bottom:1px solid var(--border); font-size:13px; display:flex; justify-content:space-between; gap:10px; align-items:flex-start;}
+.mono-list li:last-child{border-bottom:none;}
+.tag-remove{color:var(--text-3); font-size:12px; flex-shrink:0; transition:color .15s var(--ease);}
+.tag-remove:hover{color:var(--red);}
+
+.sidebar-scrim{display:none;}
+
+@media(max-width:1024px){
+  .content{padding:20px;}
+  .grid-cards{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));}
+}
+@media(max-width:880px){
+  .sidebar{position:fixed; left:-232px; z-index:50; transition:left .22s var(--ease); top:0;}
+  .sidebar.open{left:0;}
+  .sidebar-scrim{display:none; position:fixed; inset:0; background:rgba(15,23,42,.4); z-index:40;}
+  .sidebar.open ~ .sidebar-scrim, .sidebar-scrim.show{display:block;}
+  #hamburger{display:flex !important;}
+  .content{padding:18px;}
+  .field-row{grid-template-columns:1fr;}
+  .page-head{flex-direction:column; align-items:flex-start;}
+}
+@media(max-width:560px){
+  .search-wrap{max-width:none;}
+  .grid-cards{grid-template-columns:1fr 1fr;}
+  .brand-name{display:none;}
+  .brand-sub{display:none;}
+}
+</style>
+</head>
+<body data-theme="light">
+<div id="app">
+  <div class="login-wrap">
+    <div class="login-card" style="max-width:380px;">
+      <div class="login-brand">
+        <div class="login-mark"><span class="spinner"></span></div>
+        <h2 style="font-size:16px;">FAT Manager</h2>
+        <p style="color:var(--text-3);font-size:12px;margin-top:4px;">Cargando datos…</p>
+      </div>
+      <div class="skel" style="height:38px;border-radius:10px;margin-bottom:12px;"></div>
+      <div class="skel" style="height:38px;border-radius:10px;margin-bottom:16px;"></div>
+      <div class="skel" style="height:38px;border-radius:10px;"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* =========================================================================
+   FAT · Gestión de Pasantías — frontend conectado a una API real
+   Backend: Express + SQLite (better-sqlite3), auth con bcrypt + JWT
+   ========================================================================= */
+
+/* la persistencia real ahora vive en el servidor (SQLite); el navegador solo guarda el token de sesión */
+
+let DB = null;
+let session = null;
+let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
+  sort:{ students:{key:'nombre',dir:'asc'}, rotations:{key:'periodo',dir:'asc'} },
+  page:{ students:1, rotations:1 },
+  sidebarOpen:false, notifOpen:false, userMenuOpen:false };
+const PAGE_SIZE = 8;
+
+function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function addDays(iso,n){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso+'T00:00:00'); return d.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+function daysBetween(a,b){ return Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000); }
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function initials(name){ return (name||'?').split(' ').filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join(''); }
+function fmtRelative(iso){
+  const diff = Math.round((Date.now() - new Date(iso).getTime())/1000);
+  if(diff<60) return 'hace instantes';
+  if(diff<3600) return 'hace '+Math.floor(diff/60)+' min';
+  if(diff<86400) return 'hace '+Math.floor(diff/3600)+' h';
+  return 'hace '+Math.floor(diff/86400)+' d';
+}
+
+/* ---------------------------- icon system ---------------------------- */
+const ICON_PATHS = {
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  users:'<circle cx="9" cy="7" r="3.2"/><path d="M2.5 20c0-3.6 3-6.3 6.5-6.3s6.5 2.7 6.5 6.3"/><circle cx="17.5" cy="8" r="2.3"/><path d="M15.3 13.9c2.6.5 4.7 2.8 4.7 6.1"/>',
+  tag:'<path d="M12.6 2H4a2 2 0 0 0-2 2v8.6a2 2 0 0 0 .6 1.4l9.4 9.4a2 2 0 0 0 2.8 0l7.6-7.6a2 2 0 0 0 0-2.8L13 2.6a2 2 0 0 0-1.4-.6z"/><circle cx="8" cy="8" r="1.6"/>',
+  refresh:'<path d="M21 12a9 9 0 1 1-2.8-6.5"/><path d="M21 3v6h-6"/>',
+  award:'<circle cx="12" cy="8.5" r="5.2"/><path d="M9.2 13 7 21.5l5-3 5 3-2.2-8.5"/>',
+  book:'<path d="M12 6.2c-1.7-1.4-4.4-2.2-7.5-2.2v13.6c3.1 0 5.8.8 7.5 2.2 1.7-1.4 4.4-2.2 7.5-2.2V4c-3.1 0-5.8.8-7.5 2.2z"/>',
+  file:'<path d="M6.5 2.5h8l5 5v13.5a1.5 1.5 0 0 1-1.5 1.5h-11.5a1.5 1.5 0 0 1-1.5-1.5v-17a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M14.5 2.5v5h5"/><path d="M8.5 13h7"/><path d="M8.5 17h7"/>',
+  sliders:'<line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/>',
+  search:'<circle cx="11" cy="11" r="7.2"/><line x1="21" y1="21" x2="16.2" y2="16.2"/>',
+  moon:'<path d="M20.5 13.4A8.4 8.4 0 1 1 10.6 3.5a6.8 6.8 0 0 0 9.9 9.9z"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.4M12 19v2.4M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M2.5 12H5M19 12h2.5M4.6 19.4l1.7-1.7M17.7 6.3l1.7-1.7"/>',
+  bell:'<path d="M18 8.5a6 6 0 0 0-12 0c0 6.5-2.7 8.5-2.7 8.5h17.4S18 15 18 8.5z"/><path d="M13.7 20.5a2 2 0 0 1-3.4 0"/>',
+  menu:'<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>',
+  plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  edit:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7.5 18.5l-4 1 1-4z"/>',
+  trash:'<path d="M3.5 6.5h17"/><path d="M8.5 6.5v-2a1.6 1.6 0 0 1 1.6-1.6h4a1.6 1.6 0 0 1 1.6 1.6v2"/><path d="M18.5 6.5 17.6 20a1.8 1.8 0 0 1-1.8 1.7H8.2A1.8 1.8 0 0 1 6.4 20L5.5 6.5"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  download:'<path d="M12 3v12.5"/><path d="M6.5 10.5 12 16l5.5-5.5"/><path d="M4.5 20.5h15"/>',
+  check:'<polyline points="20 6.5 9.5 17 4 12"/>',
+  x:'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  chevronDown:'<polyline points="6 9 12 15 18 9"/>',
+  chevronRight:'<polyline points="9 6 15 12 9 18"/>',
+  chevronLeft:'<polyline points="15 6 9 12 15 18"/>',
+  arrowLeft:'<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>',
+  arrowRight:'<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
+  user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.6 8-6.6s8 2.4 8 6.6"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>',
+  alertTriangle:'<path d="M10.3 3.9 1.9 18.3a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9.5" x2="12" y2="13.5"/><circle cx="12" cy="17" r="0.2" stroke-width="2.6"/>',
+  checkCircle:'<circle cx="12" cy="12" r="9"/><polyline points="8 12.5 11 15.5 16 9"/>',
+  xCircle:'<circle cx="12" cy="12" r="9"/><line x1="14.5" y1="9.5" x2="9.5" y2="14.5"/><line x1="9.5" y1="9.5" x2="14.5" y2="14.5"/>',
+  upload:'<path d="M12 20.5V8"/><path d="M7 13l5-5 5 5"/><path d="M4.5 20.5h15"/>',
+  calendar:'<rect x="3" y="5" width="18" height="16" rx="2.5"/><line x1="16" y1="3" x2="16" y2="7"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  logout:'<path d="M9 21H5.5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2H9"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  inbox:'<path d="M22 12.5h-5.5l-2 3h-5l-2-3H2"/><path d="M5.7 5h12.6l3.7 7.5v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-8z"/>',
+  trending:'<polyline points="22.5 6.5 13.5 15.5 8.5 10.5 1.5 17.5"/><polyline points="16.5 6.5 22.5 6.5 22.5 12.5"/>',
+  activity:'<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  paperclip:'<path d="M21 11.5 12.4 20a4.5 4.5 0 0 1-6.4-6.4l9-9a3 3 0 0 1 4.2 4.2l-8.8 8.8a1.5 1.5 0 0 1-2.1-2.1l7.9-7.9"/>',
+};
+function icon(name, extraCls){
+  const p = ICON_PATHS[name] || ICON_PATHS.checkCircle;
+  return '<svg class="icon '+(extraCls||'')+'" viewBox="0 0 24 24">'+p+'</svg>';
+}
+
+/* ---------------------------- seed data ---------------------------- */
+/* ---------------------------- API layer (backend real: Express + SQLite) ---------------------------- */
+const API_BASE = ''; // mismo origen: Express sirve esta página y la API
+let authToken = null;
+
+async function apiFetch(method, url, body){
+  const headers = {'Content-Type':'application/json'};
+  if(authToken) headers.Authorization = 'Bearer '+authToken;
+  let res;
+  try{
+    res = await fetch(API_BASE+url, { method, headers, body: body!==undefined? JSON.stringify(body): undefined });
+  }catch(e){
+    throw new Error('No se pudo conectar con el servidor. ¿Está corriendo el backend?');
+  }
+  let data = null;
+  try{ data = await res.json(); }catch(e){ /* respuesta sin cuerpo */ }
+  if(!res.ok){
+    if(res.status===401){ authToken=null; session=null; localStorage.removeItem('fat_token'); localStorage.removeItem('fat_session'); }
+    throw new Error((data && data.error) ? data.error : ('Error del servidor ('+res.status+')'));
+  }
+  return data;
+}
+
+function pushActivity(){ /* el registro de actividad ahora lo genera el servidor en cada operación */ }
+
+/* ---------------------------- persistence: carga el estado real desde el servidor ---------------------------- */
+async function loadDB(){
+  DB = await apiFetch('GET', '/api/state');
+}
+async function saveDB(){ /* no-op: cada mutación ya persiste directo en el servidor vía su propio endpoint */ }
+function loadSession(){
+  authToken = localStorage.getItem('fat_token');
+  try{ session = JSON.parse(localStorage.getItem('fat_session')); }catch(e){ session = null; }
+  if(!authToken) session = null;
+}
+function persistSession(token, sess){
+  authToken = token; session = sess;
+  localStorage.setItem('fat_token', token);
+  localStorage.setItem('fat_session', JSON.stringify(sess));
+}
+
+/* ---------------------------- derived helpers ---------------------------- */
+function currentWeekOf(student){
+  const d = daysBetween(student.fechaInicio, todayISO());
+  const wk = Math.floor(d/7)+1;
+  return Math.max(1, Math.min(wk, DB.config.totalWeeks));
+}
+function rotationsOf(studentId){ return DB.rotations.filter(r=>r.studentId===studentId).sort((a,b)=>a.orden-b.orden); }
+function currentRotationOf(studentId){
+  const rots = rotationsOf(studentId);
+  const t = todayISO();
+  let cur = rots.find(r=> t>=r.startDate && t<=r.endDate);
+  if(!cur) cur = rots.filter(r=>r.status!=='finalizada')[0] || rots[rots.length-1];
+  return cur;
+}
+function sectionName(id){ const s=DB.sections.find(x=>x.id===id); return s?s.nombre:'—'; }
+function teacherName(id){ const t=DB.teachers.find(x=>x.id===id); return t?t.nombre:'—'; }
+function studentName(id){ const s=DB.students.find(x=>x.id===id); return s? s.nombre+' '+s.apellido : '—'; }
+function rotationAvg(rotation){
+  const notas = (rotation.informesSemanales||[]).map(e=>e.nota).filter(n=>n!=null && n!=='');
+  if(!notas.length) return null;
+  return (notas.reduce((a,b)=>a+Number(b),0)/notas.length);
+}
+function studentAvg(studentId){
+  const avgs = rotationsOf(studentId).map(r=>rotationAvg(r)).filter(a=>a!=null);
+  if(!avgs.length) return null;
+  return (avgs.reduce((a,b)=>a+b,0)/avgs.length).toFixed(1);
+}
+function isRotationEditableBy(rotation){
+  if(!session) return false;
+  if(session.role==='admin') return true;
+  if(session.role==='seccion') return rotation.teacherId===session.teacherId;
+  return false;
+}
+function computeNotifications(){
+  const list = [];
+  const t = todayISO();
+  DB.rotations.forEach(r=>{
+    const st = DB.students.find(s=>s.id===r.studentId);
+    if(!st || st.estado!=='activo') return;
+    if(r.status==='en_curso'){
+      const wk = currentWeekOf(st);
+      const hasReportThisWeek = r.informesSemanales.some(is=>is.semana===wk);
+      if(!hasReportThisWeek){
+        list.push({type:'informe', icon:'file', color:'amber', title:'Falta informe semanal', sub:studentName(r.studentId)+' · '+sectionName(r.sectionId)+' · semana '+wk});
+      }
+      if(t>=r.endDate && daysBetween(t,r.endDate) <= 0 && !r.informeFinal){
+        list.push({type:'informe-final', icon:'file', color:'red', title:'Falta informe final', sub:studentName(r.studentId)+' · '+sectionName(r.sectionId)});
+      }
+    }
+    if(r.status==='finalizada' && rotationAvg(r)==null){
+      list.push({type:'nota', icon:'award', color:'red', title:'Falta cargar calificaciones semanales', sub:studentName(r.studentId)+' · '+sectionName(r.sectionId)});
+    }
+    if(r.status==='pendiente'){
+      const d = daysBetween(t, r.startDate);
+      if(d>=0 && d<=7){
+        list.push({type:'proxima', icon:'arrowRight', color:'accent', title:'Rotación próxima a iniciar', sub:studentName(r.studentId)+' · '+sectionName(r.sectionId)+' · '+fmtDate(r.startDate)});
+      }
+    }
+  });
+  const pendCount = (DB.pendientes||[]).filter(p=>p.estado!=='completado').length;
+  if(pendCount){
+    list.push({type:'pendientes', icon:'alertTriangle', color:'amber', title:'Contenidos pendientes sin resolver', sub:pendCount+' registro'+(pendCount===1?'':'s')+' en Contenidos Pendientes'});
+  }
+  return list;
+}
+
+/* ---------------------------- auth (real: bcrypt + JWT contra el servidor) ---------------------------- */
+async function tryLogin(username, password){
+  const data = await apiFetch('POST', '/api/auth/login', { username, password }); // lanza Error si falla
+  persistSession(data.token, data.user);
+  ui.view='dashboard';
+  return true;
+}
+function logout(){ authToken=null; session=null; localStorage.removeItem('fat_token'); localStorage.removeItem('fat_session'); ui.view='dashboard'; ui.userMenuOpen=false; render(); }
+
+/* ---------------------------- toast ---------------------------- */
+function toast(msg,color){
+  color = color || 'green';
+  let stack = document.getElementById('toast-stack');
+  if(!stack){ stack = document.createElement('div'); stack.id='toast-stack'; stack.className='toast-stack'; document.body.appendChild(stack); }
+  const iconName = color==='red' ? 'xCircle' : color==='amber' ? 'alertTriangle' : 'checkCircle';
+  const iconColorVar = color==='red' ? 'red-2' : color==='amber' ? 'amber-2' : 'green-2';
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = '<span class="toast-ico" style="background:var(--'+color+'-soft); color:var(--'+iconColorVar+')">'+icon(iconName,'icon-sm')+'</span><span>'+esc(msg)+'</span>';
+  stack.appendChild(el);
+  setTimeout(()=>{ el.classList.add('leaving'); setTimeout(()=>el.remove(), 220); }, 2800);
+}
+
+/* ---------------------------- confirm dialog ---------------------------- */
+function askConfirm(opts){ ui.confirm = opts; render(); }
+function renderConfirmModal(){
+  const c = ui.confirm; if(!c) return '';
+  const solid = c.danger ? 'background:var(--red); border-color:var(--red); color:#fff;' : '';
+  return `
+  <div class="modal-overlay" data-action="confirm-no">
+    <div class="modal confirm-modal">
+      <div class="modal-body" style="padding-top:26px;">
+        <div class="confirm-ico" style="background:var(--${c.danger?'red':'accent'}-soft); color:var(--${c.danger?'red-2':'accent-2'});">${icon(c.danger?'alertTriangle':'checkCircle','icon-lg')}</div>
+        <h3 style="margin-bottom:9px;">${esc(c.title||'Confirmar acción')}</h3>
+        <p style="color:var(--text-2); font-size:13.5px; line-height:1.6;">${esc(c.message||'')}</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-action="confirm-no">Cancelar</button>
+        <button class="btn" style="${solid}" data-action="confirm-yes">${esc(c.confirmLabel||'Confirmar')}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* =========================================================================
+   RENDER: LOGIN
+   ========================================================================= */
+function renderLogin(err){
+  return `
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="login-mark">FAT</div>
+        <h2 style="font-size:18px;">Gestión de Pasantías FAT</h2>
+        <p style="color:var(--text-3);font-size:12.5px;margin-top:4px;">Formación en Ambiente de Trabajo</p>
+      </div>
+      ${err?`<div class="error-msg">${icon('alertTriangle','icon-sm')} ${esc(err)}</div>`:''}
+      <div class="field">
+        <label>Usuario</label>
+        <input class="input" name="username" id="login-user" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Contraseña</label>
+        <input class="input" type="password" name="password" id="login-pass" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary" style="width:100%; justify-content:center;" type="button" id="login-submit">Iniciar sesión</button>
+      <div class="demo-creds">
+        <strong>Usuarios de demostración</strong><br>
+        Admin: <code>admin</code> / <code>admin2026</code><br>
+        Coordinador FAT: <code>coordinador</code> / <code>coord2026</code><br>
+        Profesor de sección: <code>prof.administracion</code> / <code>prof2026</code>
+      </div>
+      <p class="help-text">Backend real: servidor Express con base de datos SQLite, contraseñas con hash bcrypt y sesión mediante token JWT.</p>
+    </div>
+  </div>`;
+}
+
+/* =========================================================================
+   RENDER: SHELL
+   ========================================================================= */
+function navItem(view, iconName, label, roles){
+  if(roles && !roles.includes(session.role)) return '';
+  const active = ui.view===view ? 'active':'';
+  return `<div class="nav-item ${active}" data-action="nav" data-view="${view}"><span class="nav-icon">${icon(iconName)}</span>${label}</div>`;
+}
+
+function renderShell(){
+  const notifs = computeNotifications();
+  return `
+  <div class="shell">
+    <div class="sidebar ${ui.sidebarOpen?'open':''}">
+      <div class="brand">
+        <div class="brand-mark">FAT</div>
+        <div>
+          <div class="brand-name">FAT Manager</div>
+          <div class="brand-sub">Gestión de pasantías</div>
+        </div>
+      </div>
+      <div class="nav">
+        ${navItem('dashboard','grid','Dashboard')}
+        ${navItem('students','users','Alumnos')}
+        ${navItem('sections','tag','Secciones')}
+        ${navItem('rotations','refresh','Rotaciones')}
+        ${navItem('grades','award','Calificaciones')}
+        ${navItem('pendientes','alertTriangle','Contenidos Pendientes')}
+        ${navItem('guidelines','book','Lineamientos')}
+        ${navItem('reports','file','Informes')}
+        <div class="nav-section-label">Sistema</div>
+        ${navItem('config','sliders','Configuración', ['admin'])}
+      </div>
+      <div class="sidebar-foot">
+        <div class="user-chip" data-action="toggle-user-menu">
+          <div class="avatar">${initials(session.nombre)}</div>
+          <div class="user-meta">
+            <div class="user-name">${esc(session.nombre)}</div>
+            <div class="user-role">${roleLabel(session.role)}</div>
+          </div>
+        </div>
+        ${ui.userMenuOpen? `<button class="btn btn-sm" style="width:100%;margin-top:8px;" data-action="logout">Cerrar sesión</button>` : ''}
+      </div>
+    </div>
+    <div class="main">
+      <div class="topbar">
+        <button class="icon-btn" style="display:none" id="hamburger" data-action="toggle-sidebar">${icon('menu','icon-sm')}</button>
+        <div class="search-wrap">
+          <span class="search-icon">${icon('search','icon-sm')}</span>
+          <input class="search-input" id="global-search" placeholder="Buscar alumno por nombre, DNI o legajo…" value="${esc(ui.search)}">
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
+        <button class="icon-btn" data-action="toggle-notif" title="Notificaciones">${icon('bell','icon-sm')}${notifs.length? `<span class="badge-dot">${notifs.length>9?'9+':notifs.length}</span>`:''}</button>
+      </div>
+      ${ui.notifOpen? renderNotifPanel(notifs) : ''}
+      <div class="content">
+        ${renderView()}
+      </div>
+    </div>
+  </div>
+  ${ui.modal? renderModal() : ''}
+  ${ui.confirm? renderConfirmModal() : ''}
+  `;
+}
+
+function roleLabel(role){
+  return {admin:'Administrador', coordinador:'Coordinador FAT', seccion:'Profesor de sección'}[role] || role;
+}
+
+function renderNotifPanel(notifs){
+  return `
+  <div style="position:absolute; right:24px; top:58px; width:340px; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); z-index:30; max-height:420px; overflow-y:auto;">
+    <div style="padding:12px 14px; border-bottom:1px solid var(--border); font-weight:700; font-size:13px;">Notificaciones (${notifs.length})</div>
+    ${notifs.length? notifs.map(n=>`
+      <div class="notif-item">
+        <div class="notif-ico" style="background:var(--${n.color}-soft); color:var(--${n.color}${n.color==='accent'?'-2':n.color==='green'?'-2':n.color==='red'?'-2':n.color==='amber'?'-2':''});">${icon(n.icon,'icon-sm')}</div>
+        <div class="notif-text"><div class="notif-title">${esc(n.title)}</div><div class="notif-sub">${esc(n.sub)}</div></div>
+      </div>`).join('') : `<div class="empty-state" style="padding:24px;"><div class="em-icon">${icon('checkCircle')}</div><div class="em-title">Sin novedades pendientes</div></div>`}
+  </div>`;
+}
+
+/* =========================================================================
+   VIEW ROUTER
+   ========================================================================= */
+function renderView(){
+  switch(ui.view){
+    case 'dashboard': return renderDashboard();
+    case 'students': return renderStudents();
+    case 'student-detail': return renderStudentDetail();
+    case 'sections': return renderSections();
+    case 'rotations': return renderRotations();
+    case 'grades': return renderGrades();
+    case 'pendientes': return renderPendientes();
+    case 'guidelines': return renderGuidelines();
+    case 'reports': return renderReports();
+    case 'config': return session.role==='admin' ? renderConfig() : renderDashboard();
+    default: return renderDashboard();
+  }
+}
+
+/* ---------------------------- DASHBOARD ---------------------------- */
+function renderRing(percent){
+  const r=38, c=2*Math.PI*r;
+  const pct = Math.max(0, Math.min(100, percent));
+  const offset = c - (pct/100)*c;
+  return `<div class="ring-wrap">
+    <svg viewBox="0 0 88 88" width="88" height="88">
+      <circle class="ring-track" cx="44" cy="44" r="${r}"/>
+      <circle class="ring-fill" cx="44" cy="44" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="${offset}"/>
+    </svg>
+    <div class="ring-label">${pct}%</div>
+  </div>`;
+}
+
+function statCard(label, value, foot, iconName, tone){
+  const toneMap = { accent:['accent-soft','accent-2'], amber:['amber-soft','amber-2'], red:['red-soft','red-2'], green:['green-soft','green-2'], neutral:['surface-2','text-2'] };
+  const [bg,fg] = toneMap[tone] || toneMap.accent;
+  return `<div class="card">
+    <div style="display:flex; align-items:center; justify-content:space-between;">
+      <div class="stat-label">${esc(label)}</div>
+      <div class="stat-icon" style="background:var(--${bg}); color:var(--${fg});">${icon(iconName,'icon-sm')}</div>
+    </div>
+    <div class="stat-value">${value}</div>
+    <div class="stat-foot">${foot}</div>
+  </div>`;
+}
+
+function renderDashboard(){
+  const totalAlumnos = DB.students.length;
+  const totalProfesores = DB.teachers.filter(t=>t.rol==='seccion').length;
+  const activos = DB.students.filter(s=>s.estado==='activo');
+  const finalizadas = DB.rotations.filter(r=>r.status==='finalizada').length;
+  const enCurso = DB.rotations.filter(r=>r.status==='en_curso').length;
+  const notifs = computeNotifications();
+  const informesPend = notifs.filter(n=>n.type==='informe'||n.type==='informe-final').length;
+  const notasPend = notifs.filter(n=>n.type==='nota').length;
+  const proximas = DB.rotations.filter(r=>{ const d=daysBetween(todayISO(),r.startDate); return r.status==='pendiente' && d>=0 && d<=7; });
+  const pctFinalizadas = DB.rotations.length ? Math.round(finalizadas/DB.rotations.length*100) : 0;
+
+  const bySection = DB.sections.map(sec=>{
+    const count = DB.rotations.filter(r=>r.sectionId===sec.id && r.status==='en_curso').length;
+    return {name:sec.nombre, count};
+  });
+  const maxCount = Math.max(1, ...bySection.map(b=>b.count));
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Dashboard</h1><p class="page-sub">Semana ${Math.max(1,...activos.map(s=>currentWeekOf(s)),1)} en curso · ${roleLabel(session.role)}</p></div>
+  </div>
+  <div class="grid-cards">
+    ${statCard('Alumnos', totalAlumnos, activos.length+' activos', 'users', 'accent')}
+    ${statCard('Profesores', totalProfesores, 'en '+DB.sections.length+' secciones', 'user', 'accent')}
+    ${statCard('Rotaciones activas', enCurso, 'en curso ahora mismo', 'refresh', 'accent')}
+    ${statCard('Informes pendientes', informesPend, 'semanales y finales', 'file', informesPend?'amber':'neutral')}
+    ${statCard('Calificaciones pendientes', notasPend, 'rotaciones sin nota', 'award', notasPend?'red':'neutral')}
+    ${statCard('Próximas rotaciones', proximas.length, 'en los próximos 7 días', 'arrowRight', 'accent')}
+  </div>
+
+  <div class="dash-grid2" style="display:grid; grid-template-columns:1.4fr 1fr; gap:16px;">
+    <div class="section-card">
+      <h3>Alumnos en curso por sección</h3>
+      ${bySection.map(b=>`
+        <div class="bar-row">
+          <div class="bar-label">${esc(b.name)}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${(b.count/maxCount*100)||0}%"></div></div>
+          <div class="bar-val">${b.count}</div>
+        </div>`).join('')}
+    </div>
+    <div class="section-card" style="display:flex; flex-direction:column; align-items:center; text-align:center;">
+      <h3 style="align-self:flex-start;">Progreso general</h3>
+      ${renderRing(pctFinalizadas)}
+      <p class="cell-muted" style="margin-top:12px; font-size:12.5px;">${finalizadas} de ${DB.rotations.length} rotaciones finalizadas</p>
+    </div>
+  </div>
+
+  <div class="dash-grid3" style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
+    <div class="section-card">
+      <h3>Próximas rotaciones</h3>
+      ${proximas.length? `<ul class="mono-list">${proximas.map(r=>`<li><span>${esc(studentName(r.studentId))} ${icon('arrowRight','icon-sm')} ${esc(sectionName(r.sectionId))}</span><span class="cell-muted">${fmtDate(r.startDate)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:26px;"><div class="em-icon">${icon('calendar')}</div><div class="em-title">Sin rotaciones próximas</div></div>`}
+    </div>
+    <div class="section-card">
+      <h3>Actividad reciente</h3>
+      ${(DB.activityLog&&DB.activityLog.length)? DB.activityLog.slice(0,6).map(a=>`
+        <div class="activity-item">
+          <div class="activity-dot"></div>
+          <div><div class="activity-text">${esc(a.text)}</div><div class="activity-time">${fmtRelative(a.ts)}</div></div>
+        </div>`).join('') : `<div class="empty-state" style="padding:26px;"><div class="em-icon">${icon('activity')}</div><div class="em-title">Sin actividad reciente</div></div>`}
+    </div>
+  </div>
+  <style>@media(max-width:880px){.dash-grid2, .dash-grid3{grid-template-columns:1fr !important;}}</style>
+  `;
+}
+
+/* ---------------------------- STUDENTS LIST ---------------------------- */
+function studentSortValue(s, key){
+  switch(key){
+    case 'nombre': return (s.apellido+' '+s.nombre).toLowerCase();
+    case 'curso': return (s.curso+s.division).toLowerCase();
+    case 'legajo': return s.legajo;
+    case 'semana': return s.estado==='activo' ? currentWeekOf(s) : -1;
+    case 'promedio': return Number(studentAvg(s.id))||-1;
+    case 'estado': return s.estado;
+    default: return '';
+  }
+}
+function thSort(table, key, label){
+  const st = ui.sort[table];
+  const active = st && st.key===key;
+  const arrow = active ? (st.dir==='asc'?'↑':'↓') : '↕';
+  return `<th class="sortable" data-action="sort-th" data-table="${table}" data-key="${key}">${label}<span class="sort-arrow ${active?'active':''}">${arrow}</span></th>`;
+}
+function sortAndPaginate(list, table, valueFn){
+  const st = ui.sort[table];
+  if(st){
+    list = list.slice().sort((a,b)=>{
+      const av=valueFn(a,st.key), bv=valueFn(b,st.key);
+      if(av<bv) return st.dir==='asc'?-1:1;
+      if(av>bv) return st.dir==='asc'?1:-1;
+      return 0;
+    });
+  }
+  const totalPages = Math.max(1, Math.ceil(list.length/PAGE_SIZE));
+  const page = Math.min(ui.page[table]||1, totalPages);
+  const start = (page-1)*PAGE_SIZE;
+  return { pageItems:list.slice(start,start+PAGE_SIZE), totalPages, page, total:list.length };
+}
+function renderPager(table, page, totalPages, total){
+  if(totalPages<=1) return `<div class="table-foot"><span class="cell-muted" style="font-size:12px;">${total} resultado${total===1?'':'s'}</span><div></div></div>`;
+  let pages='';
+  for(let p=1;p<=totalPages;p++){
+    if(totalPages>7 && p!==1 && p!==totalPages && Math.abs(p-page)>1){ if(p===2||p===totalPages-1) pages+=`<span class="cell-muted" style="padding:0 4px;">…</span>`; continue; }
+    pages += `<button class="pager-btn ${p===page?'active':''}" data-action="page" data-table="${table}" data-page="${p}">${p}</button>`;
+  }
+  return `<div class="table-foot">
+    <span class="cell-muted" style="font-size:12px;">${total} resultados</span>
+    <div class="pager">
+      <button class="pager-btn" data-action="page" data-table="${table}" data-dir="prev" ${page<=1?'disabled':''}>${icon('chevronLeft','icon-sm')}</button>
+      ${pages}
+      <button class="pager-btn" data-action="page" data-table="${table}" data-dir="next" ${page>=totalPages?'disabled':''}>${icon('chevronRight','icon-sm')}</button>
+    </div>
+  </div>`;
+}
+
+function renderStudents(){
+  let list = DB.students.slice();
+  const f = ui.filters;
+  if(ui.search){
+    const q = ui.search.toLowerCase();
+    list = list.filter(s=> (s.nombre+' '+s.apellido).toLowerCase().includes(q) || s.dni.includes(q) || s.legajo.toLowerCase().includes(q));
+  }
+  if(f.curso) list = list.filter(s=>s.curso===f.curso);
+  if(f.estado) list = list.filter(s=>s.estado===f.estado);
+  if(f.seccion) list = list.filter(s=> currentRotationOf(s.id) && currentRotationOf(s.id).sectionId===f.seccion);
+  if(f.grupo) list = list.filter(s=> s.groupId===f.grupo);
+
+  const cursos = [...new Set(DB.students.map(s=>s.curso))];
+  const groups = DB.groups || [];
+  const { pageItems, totalPages, page, total } = sortAndPaginate(list, 'students', studentSortValue);
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Alumnos</h1><p class="page-sub">${DB.students.length} alumnos registrados</p></div>
+    ${session.role==='admin'? `<button class="btn btn-primary" data-action="new-student">${icon('plus','icon-sm')} Nuevo alumno</button>`:''}
+  </div>
+  <div class="filters-row">
+    <select class="select" data-action="filter-curso"><option value="">Todos los cursos</option>${cursos.map(c=>`<option value="${esc(c)}" ${f.curso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
+    <select class="select" data-action="filter-estado">
+      <option value="">Todos los estados</option>
+      ${['activo','pausado','finalizado','abandonado'].map(e=>`<option value="${e}" ${f.estado===e?'selected':''}>${e[0].toUpperCase()+e.slice(1)}</option>`).join('')}
+    </select>
+    <select class="select" data-action="filter-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.seccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+    <select class="select" data-action="filter-grupo"><option value="">Todos los grupos</option>${groups.map(g=>`<option value="${g.id}" ${f.grupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr>
+      ${thSort('students','nombre','Alumno')}
+      ${thSort('students','curso','Curso')}
+      ${thSort('students','legajo','Legajo')}
+      <th>Grupo</th>
+      ${thSort('students','semana','Semana')}
+      <th>Sección actual</th>
+      ${thSort('students','promedio','Promedio')}
+      ${thSort('students','estado','Estado')}
+    </tr></thead>
+    <tbody>
+    ${pageItems.length? pageItems.map(s=>{
+      const cur = currentRotationOf(s.id);
+      const avg = studentAvg(s.id);
+      const grupo = groups.find(g=>g.id===s.groupId);
+      return `<tr class="clickable" data-action="open-student" data-id="${s.id}">
+        <td class="cell-strong">${esc(s.nombre)} ${esc(s.apellido)}</td>
+        <td>${esc(s.curso)} "${esc(s.division)}"</td>
+        <td class="cell-muted">${esc(s.legajo)}</td>
+        <td>${grupo? `<span class="badge badge-neutral">${esc(grupo.nombre)}</span>` : '<span class="cell-muted">—</span>'}</td>
+        <td>${s.estado==='activo'? currentWeekOf(s)+' / '+DB.config.totalWeeks : '—'}</td>
+        <td>${cur? esc(sectionName(cur.sectionId)) : '—'}</td>
+        <td>${avg? `<span class="badge badge-accent">${avg}</span>` : '<span class="cell-muted">—</span>'}</td>
+        <td>${estadoBadge(s.estado)}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="em-icon">${icon('search')}</div><div class="em-title">No se encontraron alumnos</div>Probá ajustar los filtros o el buscador.</div></td></tr>`}
+    </tbody>
+  </table>
+  ${renderPager('students', page, totalPages, total)}
+  </div>`;
+}
+
+function estadoBadge(estado){
+  const map = {activo:'green', pausado:'amber', finalizado:'accent', abandonado:'red'};
+  const c = map[estado]||'neutral';
+  return `<span class="badge badge-${c}"><span class="badge-dot-ico"></span>${estado}</span>`;
+}
+function statusBadge(status){
+  const map = {pendiente:['neutral','Pendiente'], en_curso:['amber','En curso'], finalizada:['green','Finalizada']};
+  const [c,l] = map[status]||['neutral',status];
+  return `<span class="badge badge-${c}"><span class="badge-dot-ico"></span>${l}</span>`;
+}
+
+/* ---------------------------- STUDENT DETAIL ---------------------------- */
+function renderStudentDetail(){
+  const s = DB.students.find(x=>x.id===ui.selectedStudentId);
+  if(!s) return `<div class="empty-state">Alumno no encontrado</div>`;
+  const rots = rotationsOf(s.id);
+  const wk = s.estado==='activo' ? currentWeekOf(s) : null;
+  const avg = studentAvg(s.id);
+  const canEditStudent = session.role==='admin';
+
+  return `
+  <div class="page-head">
+    <div>
+      <button class="btn btn-ghost btn-sm" data-action="back-students" style="margin-bottom:8px;">← Volver a alumnos</button>
+      <h1 class="page-title">${esc(s.nombre)} ${esc(s.apellido)}</h1>
+      <p class="page-sub">Legajo ${esc(s.legajo)} · ${esc(s.curso)} "${esc(s.division)}" · DNI ${esc(s.dni)}</p>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-sm" data-action="export-student-pdf" data-id="${s.id}">${icon('download','icon-sm')} PDF</button>
+      ${canEditStudent? `<button class="btn btn-sm" data-action="edit-student" data-id="${s.id}">${icon('edit','icon-sm')} Editar</button>
+      <button class="btn btn-sm btn-danger" data-action="delete-student" data-id="${s.id}">${icon('trash','icon-sm')} Eliminar</button>`:''}
+    </div>
+  </div>
+
+  <div class="grid-cards" style="grid-template-columns:repeat(4,1fr);">
+    <div class="card"><div class="stat-label">Semana actual</div><div class="stat-value">${wk? wk+' / '+DB.config.totalWeeks : '—'}</div></div>
+    <div class="card"><div class="stat-label">Estado</div><div class="stat-value" style="font-size:16px;">${estadoBadge(s.estado)}</div></div>
+    <div class="card"><div class="stat-label">Promedio general</div><div class="stat-value">${avg||'—'}</div></div>
+    <div class="card"><div class="stat-label">Rotaciones finalizadas</div><div class="stat-value">${rots.filter(r=>r.status==='finalizada').length} / ${rots.length}</div></div>
+  </div>
+
+  <div class="section-card">
+    <h3>Promedio Final</h3>
+    ${(()=>{
+      const noteCount = rots.reduce((a,r)=>a+(r.informesSemanales||[]).filter(e=>e.nota!=null).length, 0);
+      const threshold = DB.config.notaAprobacion || 6;
+      const aprobado = avg!=null && Number(avg) >= threshold;
+      return `<div style="display:flex; gap:28px; align-items:center; flex-wrap:wrap;">
+        <div><div class="cell-muted" style="font-size:12px;">Promedio numérico</div><div class="stat-value" style="margin-top:4px;">${avg||'—'}</div></div>
+        <div><div class="cell-muted" style="font-size:12px;">Estado</div><div style="margin-top:6px;">${avg==null? '<span class="badge badge-neutral">Sin notas suficientes</span>' : (aprobado? '<span class="badge badge-green">Aprobado</span>' : '<span class="badge badge-red">Desaprobado</span>')}</div></div>
+        <div><div class="cell-muted" style="font-size:12px;">Cantidad de notas cargadas</div><div class="stat-value" style="margin-top:4px;">${noteCount}</div></div>
+      </div>
+      <p class="help-text" style="margin-top:12px;">Promedio de los promedios de cada sección finalizada. Nota mínima de aprobación configurada: ${threshold}.</p>`;
+    })()}
+  </div>
+
+  <div class="section-card">
+    <h3>Recorrido por secciones</h3>
+    <div class="timeline">
+      ${rots.map(r=>{
+        const cls = r.status==='finalizada'?'done':(r.status==='en_curso'?'current':'');
+        const dot = r.status==='finalizada'? icon('check','icon-sm') : r.orden;
+        return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${esc(sectionName(r.sectionId))}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h3>Historial de rotaciones</h3>
+    ${rots.map(r=>renderRotationBlock(r)).join('')}
+  </div>
+  `;
+}
+
+function renderRotationBlock(r){
+  const editable = isRotationEditableBy(r);
+  return `
+  <div style="border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
+      <div style="font-weight:700; font-size:13.5px;">${r.orden}. ${esc(sectionName(r.sectionId))} <span class="cell-muted" style="font-weight:500;">· ${esc(teacherName(r.teacherId))}</span></div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        ${statusBadge(r.status)}
+        ${rotationAvg(r)!=null? `<span class="badge badge-accent">Promedio: ${rotationAvg(r).toFixed(1)}</span>`:''}
+        ${editable? `<button class="btn btn-sm" data-action="edit-rotation" data-id="${r.id}">Cargar / Editar</button>`:''}
+      </div>
+    </div>
+    <div class="kv" style="margin-bottom:8px;">
+      <dt>Período</dt><dd>${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</dd>
+    </div>
+    ${r.plan? `<p style="margin-bottom:6px;"><strong>Plan de enseñanza:</strong> ${esc(r.plan)}</p>`:''}
+    ${r.actividades? `<p style="margin-bottom:6px;"><strong>Actividades:</strong> ${esc(r.actividades)}</p>`:''}
+    ${r.observaciones? `<p style="margin-bottom:6px;"><strong>Observaciones:</strong> ${esc(r.observaciones)}</p>`:''}
+    ${r.informesSemanales.length? `<div style="margin-top:8px;"><strong style="font-size:12.5px;">Informes semanales</strong><ul class="mono-list">${r.informesSemanales.map(i=>`<li><span>Semana ${i.semana}: ${esc(i.texto)}</span><span class="cell-muted">${fmtDate(i.fecha)}</span></li>`).join('')}</ul></div>`:''}
+    ${r.informeFinal? `<p style="margin-top:8px;"><strong>Informe final:</strong> ${esc(r.informeFinal)}</p>`:''}
+    ${r.comentarios? `<p style="margin-top:6px;"><strong>Comentarios:</strong> ${esc(r.comentarios)}</p>`:''}
+    ${r.attachmentUrl? `<p style="margin-top:6px;"><strong>Adjunto:</strong> <a href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener">${esc(r.attachmentName||'Ver archivo')}</a></p>`:''}
+  </div>`;
+}
+
+/* ---------------------------- SECTIONS ---------------------------- */
+function renderSections(){
+  const sorted = DB.sections.slice().sort((a,b)=>a.orden-b.orden);
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Secciones</h1><p class="page-sub">${sorted.length} sección${sorted.length===1?'':'es'} · ${sorted.reduce((a,s)=>a+(s.weeks||5),0)} semanas en total</p></div>
+    ${session.role==='admin'? `<button class="btn btn-primary" data-action="new-section">${icon('plus','icon-sm')} Nueva sección</button>`:''}
+  </div>
+  <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));">
+    ${sorted.map((sec,idx)=>{
+      const count = DB.rotations.filter(r=>r.sectionId===sec.id && r.status==='en_curso').length;
+      return `<div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <div style="font-weight:700; font-size:14.5px;">${sec.orden}. ${esc(sec.nombre)}</div>
+            <div class="cell-muted" style="font-size:12px; margin-top:2px;">${esc(teacherName(sec.teacherId))} · ${sec.weeks||5} semana${(sec.weeks||5)===1?'':'s'}</div>
+          </div>
+          ${session.role==='admin'? `<div style="display:flex; gap:2px;">
+            <button class="btn btn-ghost btn-sm" data-action="move-section" data-id="${sec.id}" data-dir="up" ${idx===0?'disabled':''} title="Subir">↑</button>
+            <button class="btn btn-ghost btn-sm" data-action="move-section" data-id="${sec.id}" data-dir="down" ${idx===sorted.length-1?'disabled':''} title="Bajar">↓</button>
+            <button class="btn btn-ghost btn-sm" data-action="edit-section" data-id="${sec.id}">${icon('edit','icon-sm')}</button>
+            <button class="btn btn-ghost btn-sm" data-action="delete-section" data-id="${sec.id}">${icon('trash','icon-sm')}</button>
+          </div>`:''}
+        </div>
+        <div class="stat-value" style="margin-top:12px;">${count}</div>
+        <div class="stat-foot">alumnos en curso ahora</div>
+      </div>`;
+    }).join('')}
+    ${!sorted.length? `<div class="empty-state" style="grid-column:1/-1;"><div class="em-icon">${icon('tag')}</div><div class="em-title">Todavía no hay secciones</div>${session.role==='admin'?'Creá la primera para poder dar de alta alumnos.':''}</div>` : ''}
+  </div>`;
+}
+
+/* ---------------------------- ROTATIONS ---------------------------- */
+function rotationSortValue(r, key){
+  switch(key){
+    case 'alumno': return studentName(r.studentId).toLowerCase();
+    case 'seccion': return sectionName(r.sectionId).toLowerCase();
+    case 'profesor': return teacherName(r.teacherId).toLowerCase();
+    case 'periodo': return r.startDate;
+    case 'estado': return r.status;
+    case 'nota': return rotationAvg(r)==null? -1 : rotationAvg(r);
+    default: return '';
+  }
+}
+function renderRotations(){
+  let list = DB.rotations.slice();
+  const f = ui.filters;
+  if(f.rotSeccion) list = list.filter(r=>r.sectionId===f.rotSeccion);
+  if(f.rotEstado) list = list.filter(r=>r.status===f.rotEstado);
+  if(session.role==='seccion') list = list.filter(r=>r.teacherId===session.teacherId);
+
+  const { pageItems, totalPages, page, total } = sortAndPaginate(list, 'rotations', rotationSortValue);
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Rotaciones</h1><p class="page-sub">${list.length} rotaciones</p></div>
+  </div>
+  <div class="filters-row">
+    <select class="select" data-action="filter-rot-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.rotSeccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+    <select class="select" data-action="filter-rot-estado"><option value="">Todos los estados</option>
+      <option value="pendiente" ${f.rotEstado==='pendiente'?'selected':''}>Pendiente</option>
+      <option value="en_curso" ${f.rotEstado==='en_curso'?'selected':''}>En curso</option>
+      <option value="finalizada" ${f.rotEstado==='finalizada'?'selected':''}>Finalizada</option>
+    </select>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr>
+      ${thSort('rotations','alumno','Alumno')}
+      ${thSort('rotations','seccion','Sección')}
+      ${thSort('rotations','profesor','Profesor')}
+      ${thSort('rotations','periodo','Período')}
+      ${thSort('rotations','estado','Estado')}
+      ${thSort('rotations','nota','Nota')}
+      <th></th>
+    </tr></thead>
+    <tbody>
+    ${pageItems.length? pageItems.map(r=>`
+      <tr>
+        <td class="cell-strong" style="cursor:pointer;" data-action="open-student" data-id="${r.studentId}">${esc(studentName(r.studentId))}</td>
+        <td>${esc(sectionName(r.sectionId))}</td>
+        <td class="cell-muted">${esc(teacherName(r.teacherId))}</td>
+        <td class="cell-muted">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</td>
+        <td>${statusBadge(r.status)}</td>
+        <td>${rotationAvg(r)!=null? rotationAvg(r).toFixed(1) : '<span class="cell-muted">—</span>'}</td>
+        <td>${isRotationEditableBy(r)? `<button class="btn btn-sm" data-action="edit-rotation" data-id="${r.id}">${icon('edit','icon-sm')} Cargar</button>`:''}</td>
+      </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('refresh')}</div><div class="em-title">Sin rotaciones</div>Ajustá los filtros seleccionados.</div></td></tr>`}
+    </tbody>
+  </table>
+  ${renderPager('rotations', page, totalPages, total)}
+  </div>`;
+}
+
+/* ---------------------------- GRADES ---------------------------- */
+function renderGrades(){
+  let rots = DB.rotations.slice();
+  if(session.role==='seccion') rots = rots.filter(r=>r.teacherId===session.teacherId);
+  rots = rots.filter(r=>r.status!=='pendiente');
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Calificaciones</h1><p class="page-sub">Historial de notas por rotación</p></div>
+    ${session.role==='admin'? `<button class="btn" data-action="export-grades-excel">${icon('download','icon-sm')} Exportar Excel</button>`:''}
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Alumno</th><th>Sección</th><th>Profesor</th><th>Estado</th><th>Promedio</th><th></th></tr></thead>
+    <tbody>
+    ${rots.length? rots.map(r=>`
+      <tr>
+        <td class="cell-strong">${esc(studentName(r.studentId))}</td>
+        <td>${esc(sectionName(r.sectionId))}</td>
+        <td class="cell-muted">${esc(teacherName(r.teacherId))}</td>
+        <td>${statusBadge(r.status)}</td>
+        <td>${rotationAvg(r)!=null? `<span class="badge badge-accent">${rotationAvg(r).toFixed(1)}</span>` : `<span class="badge badge-red">Sin cargar</span>`}</td>
+        <td>${isRotationEditableBy(r)? `<button class="btn btn-sm" data-action="edit-rotation" data-id="${r.id}">Cargar nota</button>`:''}</td>
+      </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">Sin datos aún</div></td></tr>`}
+    </tbody>
+  </table>
+  </div>
+
+  <div class="section-card" style="margin-top:16px;">
+    <h3>Promedios por alumno</h3>
+    <ul class="mono-list">
+      ${DB.students.map(s=>`<li><span>${esc(s.nombre)} ${esc(s.apellido)}</span><span class="cell-strong">${studentAvg(s.id)||'—'}</span></li>`).join('')}
+    </ul>
+  </div>`;
+}
+
+/* ---------------------------- CONTENIDOS PENDIENTES ---------------------------- */
+function pendienteEstadoBadge(estado){
+  const map = {pendiente:['red','Pendiente'], en_recuperacion:['amber','En recuperación'], completado:['green','Completado']};
+  const [c,l] = map[estado]||['neutral',estado];
+  return `<span class="badge badge-${c}"><span class="badge-dot-ico"></span>${l}</span>`;
+}
+function renderPendientes(){
+  let list = (DB.pendientes||[]).slice();
+  if(session.role==='seccion') list = list.filter(p=>p.teacherId===session.teacherId);
+  list.sort((a,b)=> (a.estado==='completado')-(b.estado==='completado') || (b.createdAt||'').localeCompare(a.createdAt||''));
+  const canCreate = session.role==='admin' || session.role==='seccion';
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Contenidos Pendientes</h1><p class="page-sub">Alumnos con contenido sin completar por ausencia o falta de calificación</p></div>
+    ${canCreate? `<button class="btn btn-primary" data-action="new-pendiente">${icon('plus','icon-sm')} Nuevo registro</button>`:''}
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Alumno</th><th>Sección</th><th>Profesor</th><th>Semana</th><th>Motivo</th><th>Contenido</th><th>Estado</th><th></th></tr></thead>
+    <tbody>
+    ${list.length? list.map(p=>{
+      const editable = session.role==='admin' || (session.role==='seccion' && p.teacherId===session.teacherId);
+      return `<tr>
+        <td class="cell-strong" style="cursor:pointer;" data-action="open-student" data-id="${p.studentId}">${esc(studentName(p.studentId))}</td>
+        <td>${esc(sectionName(p.sectionId))}</td>
+        <td class="cell-muted">${esc(teacherName(p.teacherId))}</td>
+        <td>${p.semana||'—'}</td>
+        <td>${esc(p.motivo)}</td>
+        <td class="cell-muted">${esc(p.contenido||'—')}</td>
+        <td>${pendienteEstadoBadge(p.estado)}</td>
+        <td>${editable? `
+          <select class="select" style="padding:5px 8px; font-size:12px;" data-action="pendiente-estado" data-id="${p.id}">
+            <option value="pendiente" ${p.estado==='pendiente'?'selected':''}>Pendiente</option>
+            <option value="en_recuperacion" ${p.estado==='en_recuperacion'?'selected':''}>En recuperación</option>
+            <option value="completado" ${p.estado==='completado'?'selected':''}>Completado</option>
+          </select>`:''}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="em-icon">${icon('checkCircle')}</div><div class="em-title">Sin contenidos pendientes</div>Se generan automáticamente al finalizar una rotación sin notas, o marcando una ausencia en el informe semanal.</div></td></tr>`}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+/* ---------------------------- GUIDELINES ---------------------------- */
+function renderGuidelines(){
+  const canEdit = session.role==='admin' || session.role==='coordinador';
+  const c = DB.config;
+  const consignas = DB.consignas || [];
+  const objetivos = DB.objetivos || [];
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Lineamientos</h1><p class="page-sub">Publicados por el Coordinador FAT</p></div>
+    ${canEdit? `<button class="btn btn-primary" data-action="edit-guidelines">${icon('edit','icon-sm')} Editar</button>`:''}
+  </div>
+  <div class="section-card">
+    <h3>Lineamientos generales</h3>
+    <p>${esc(c.lineamientos)||'Sin publicar aún.'}</p>
+  </div>
+  <div class="section-card">
+    <h3>Consignas ${canEdit? `<button class="btn btn-sm" data-action="add-consigna">${icon('plus','icon-sm')} Agregar</button>`:''}</h3>
+    ${consignas.length? `<ul class="mono-list">${consignas.map(cn=>`<li><span>${esc(cn.texto)}</span>${canEdit?`<span class="tag-remove" data-action="del-consigna" data-id="${cn.id}">${icon('x','icon-sm')}</span>`:''}</li>`).join('')}</ul>` : `<div class="empty-state">Sin consignas cargadas</div>`}
+  </div>
+  <div class="section-card">
+    <h3>Objetivos semanales ${canEdit? `<button class="btn btn-sm" data-action="add-objetivo">${icon('plus','icon-sm')} Agregar</button>`:''}</h3>
+    ${objetivos.length? `<ul class="mono-list">${objetivos.slice().sort((a,b)=>a.semana-b.semana).map(o=>`<li><span><strong>Semana ${o.semana}:</strong> ${esc(o.texto)}</span>${canEdit?`<span class="tag-remove" data-action="del-objetivo" data-id="${o.id}">${icon('x','icon-sm')}</span>`:''}</li>`).join('')}</ul>` : `<div class="empty-state">Sin objetivos cargados</div>`}
+  </div>`;
+}
+
+/* ---------------------------- REPORTS ---------------------------- */
+function renderReports(){
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Informes</h1><p class="page-sub">Historial completo por alumno, listo para exportar</p></div>
+    ${session.role==='admin'? `<div style="display:flex; gap:8px;"><button class="btn" data-action="export-all-excel">${icon('download','icon-sm')} Excel general</button><button class="btn" data-action="export-all-pdf">${icon('download','icon-sm')} PDF general</button></div>`:''}
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Alumno</th><th>Informes semanales</th><th>Informes finales</th><th>Observaciones</th><th></th></tr></thead>
+    <tbody>
+    ${DB.students.map(s=>{
+      const rots = rotationsOf(s.id);
+      const semCount = rots.reduce((a,r)=>a+r.informesSemanales.length,0);
+      const finCount = rots.filter(r=>r.informeFinal).length;
+      const obsCount = rots.filter(r=>r.observaciones).length;
+      return `<tr>
+        <td class="cell-strong">${esc(s.nombre)} ${esc(s.apellido)}</td>
+        <td>${semCount}</td>
+        <td>${finCount} / ${rots.length}</td>
+        <td>${obsCount}</td>
+        <td><button class="btn btn-sm" data-action="open-student" data-id="${s.id}">Ver</button> <button class="btn btn-sm" data-action="export-student-pdf" data-id="${s.id}">PDF</button></td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+/* ---------------------------- CONFIG (admin) ---------------------------- */
+function renderConfig(){
+  const c = DB.config;
+  const groups = DB.groups || [];
+  return `
+  <div class="page-head"><div><h1 class="page-title">Configuración</h1><p class="page-sub">Parámetros generales del FAT y gestión de personal</p></div></div>
+
+  <div class="section-card">
+    <h3>Duración de la pasantía</h3>
+    <div class="kv">
+      <dt>Duración total</dt><dd>${c.totalWeeks} semanas</dd>
+    </div>
+    <p class="help-text">Se calcula automáticamente sumando la duración de cada sección. Para cambiarla, editá la duración de las secciones individuales en <strong>Secciones</strong>.</p>
+  </div>
+
+  <div class="section-card">
+    <h3>Aprobación</h3>
+    <div class="field-row">
+      <div class="field"><label>Nota mínima de aprobación</label><input class="input" type="number" min="1" max="10" id="cfg-nota-aprobacion" value="${c.notaAprobacion||6}"></div>
+    </div>
+    <button class="btn btn-primary btn-sm" data-action="save-nota-aprobacion">Guardar</button>
+    <p class="help-text">Se usa para calcular el estado Aprobado/Desaprobado en el Promedio Final de cada alumno.</p>
+  </div>
+
+  <div class="section-card">
+    <h3>Grupos <button class="btn btn-sm" data-action="new-group">${icon('plus','icon-sm')} Nuevo grupo</button></h3>
+    ${groups.length? `<ul class="mono-list">${groups.map(g=>{
+      const count = DB.students.filter(s=>s.groupId===g.id).length;
+      return `<li><span>${esc(g.nombre)} <span class="cell-muted">· ${count} alumno${count===1?'':'s'}</span></span>
+        <span style="display:flex; gap:10px; align-items:center;">
+          <span class="tag-remove" data-action="edit-group" data-id="${g.id}">${icon('edit','icon-sm')}</span>
+          <span class="tag-remove" data-action="delete-group" data-id="${g.id}">${icon('x','icon-sm')}</span>
+        </span></li>`;
+    }).join('')}</ul>` : `<div class="empty-state">Sin grupos creados todavía</div>`}
+    <p class="help-text">Los grupos son independientes de las secciones: sirven para organizar alumnos (ej. "Grupo A", "Turno mañana"). Se asignan desde la ficha de cada alumno.</p>
+  </div>
+
+  <div class="section-card">
+    <h3>Profesores <button class="btn btn-sm" data-action="new-teacher">${icon('plus','icon-sm')} Nuevo profesor</button></h3>
+    <div class="table-wrap" style="box-shadow:none;">
+    <table>
+      <thead><tr><th>Nombre</th><th>Rol</th><th>Sección</th><th>Usuario</th><th></th></tr></thead>
+      <tbody>
+      ${DB.teachers.map(t=>{
+        const u = DB.users.find(x=>x.teacherId===t.id);
+        const sec = DB.sections.find(s=>s.teacherId===t.id);
+        return `<tr>
+          <td class="cell-strong">${esc(t.nombre)}</td>
+          <td>${t.rol==='coordinador'?'Coordinador FAT':'Profesor de sección'}</td>
+          <td>${sec? esc(sec.nombre):'—'}</td>
+          <td class="cell-muted">${u? esc(u.username):'—'}</td>
+          <td><button class="btn btn-sm" data-action="edit-teacher" data-id="${t.id}">${icon('edit','icon-sm')}</button> <button class="btn btn-sm btn-danger" data-action="delete-teacher" data-id="${t.id}">Eliminar</button></td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h3>Exportación general</h3>
+    <div style="display:flex; gap:8px;">
+      <button class="btn" data-action="export-all-excel">${icon('download','icon-sm')} Exportar alumnos a Excel</button>
+      <button class="btn" data-action="export-all-pdf">${icon('download','icon-sm')} Exportar informe general a PDF</button>
+    </div>
+  </div>`;
+}
+
+/* =========================================================================
+   MODALS
+   ========================================================================= */
+function renderModal(){
+  const m = ui.modal;
+  if(!m) return '';
+  let body='', title='', wide=false;
+  if(m.type==='student-form'){ title = m.data? 'Editar alumno':'Nuevo alumno'; body = studentFormHtml(m.data); }
+  else if(m.type==='section-form'){ title = m.data? 'Editar sección':'Nueva sección'; body = sectionFormHtml(m.data); }
+  else if(m.type==='group-form'){ title = m.data? 'Editar grupo':'Nuevo grupo'; body = `<div class="field"><label>Nombre del grupo</label><input class="input" id="f-grupo-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Grupo A"></div>`; }
+  else if(m.type==='teacher-form'){ title = m.data? 'Editar profesor':'Nuevo profesor'; body = teacherFormHtml(m.data); }
+  else if(m.type==='rotation-form'){ title='Cargar rotación'; wide=true; body = rotationFormHtml(m.data); }
+  else if(m.type==='guidelines-form'){ title='Editar lineamientos'; body = guidelinesFormHtml(); }
+  else if(m.type==='consigna-form'){ title='Nueva consigna'; body = `<div class="field"><label>Texto</label><textarea class="input" id="f-consigna"></textarea></div>`; }
+  else if(m.type==='objetivo-form'){ title='Nuevo objetivo semanal'; body = `<div class="field-row"><div class="field"><label>Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-obj-semana"></div></div><div class="field"><label>Objetivo</label><textarea class="input" id="f-obj-texto"></textarea></div>`; }
+  else if(m.type==='pendiente-form'){ title='Nuevo contenido pendiente'; body = pendienteFormHtml(); }
+
+  return `
+  <div class="modal-overlay" data-action="close-modal-bg">
+    <div class="modal ${wide?'modal-wide':''}">
+      <div class="modal-head"><h3>${title}</h3><button class="icon-btn" data-action="close-modal">${icon('x','icon-sm')}</button></div>
+      <div class="modal-body">${body}</div>
+      <div class="modal-foot">
+        <button class="btn" data-action="close-modal">Cancelar</button>
+        <button class="btn btn-primary" data-action="submit-modal" data-type="${m.type}" data-id="${m.data&&m.data.id?m.data.id:''}">Guardar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function studentFormHtml(s){
+  s = s||{};
+  return `
+  <div class="field-row">
+    <div class="field"><label>Nombre</label><input class="input" id="f-nombre" value="${esc(s.nombre||'')}"></div>
+    <div class="field"><label>Apellido</label><input class="input" id="f-apellido" value="${esc(s.apellido||'')}"></div>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>DNI</label><input class="input" id="f-dni" value="${esc(s.dni||'')}"></div>
+    <div class="field"><label>Legajo</label><input class="input" id="f-legajo" value="${esc(s.legajo||'')}"></div>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>Curso</label><input class="input" id="f-curso" value="${esc(s.curso||'')}" placeholder="ej. 6°"></div>
+    <div class="field"><label>División</label><input class="input" id="f-division" value="${esc(s.division||'')}" placeholder="ej. A"></div>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>Fecha de inicio</label><input class="input" type="date" id="f-fecha" value="${s.fechaInicio||todayISO()}"></div>
+    <div class="field"><label>Estado</label>
+      <select class="select" id="f-estado" style="width:100%;">
+        ${['activo','pausado','finalizado','abandonado'].map(e=>`<option value="${e}" ${s.estado===e?'selected':''}>${e[0].toUpperCase()+e.slice(1)}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div class="field"><label>Grupo (opcional)</label>
+    <select class="select" id="f-grupo" style="width:100%;">
+      <option value="">Sin grupo</option>
+      ${(DB.groups||[]).map(g=>`<option value="${g.id}" ${s.groupId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}
+    </select>
+  </div>
+  ${!s.id? `<p class="help-text">Al crear el alumno se generarán automáticamente sus ${DB.sections.length} rotaciones (una por sección) según el orden y duración vigentes.</p>`:''}
+  `;
+}
+
+function sectionFormHtml(sec){
+  sec = sec||{};
+  return `
+  <div class="field"><label>Nombre de la sección</label><input class="input" id="f-sec-nombre" value="${esc(sec.nombre||'')}"></div>
+  <div class="field-row">
+    <div class="field"><label>Profesor a cargo</label>
+      <select class="select" id="f-sec-teacher" style="width:100%;">
+        <option value="">Sin asignar</option>
+        ${DB.teachers.filter(t=>t.rol==='seccion').map(t=>`<option value="${t.id}" ${sec.teacherId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Duración (semanas)</label><input class="input" type="number" min="1" id="f-sec-weeks" value="${sec.weeks||5}"></div>
+  </div>
+  ${!sec.id? `<p class="help-text">Se agrega al final del orden de rotación. Después la podés reordenar con las flechas ↑ ↓.</p>`:`<p class="help-text">Si cambiás la duración, el total de semanas del programa se recalcula solo.</p>`}
+  `;
+}
+
+function teacherFormHtml(t){
+  t = t||{};
+  const u = t.id ? DB.users.find(x=>x.teacherId===t.id) : null;
+  return `
+  <div class="field"><label>Nombre completo</label><input class="input" id="f-t-nombre" value="${esc(t.nombre||'')}"></div>
+  <div class="field"><label>Rol</label>
+    <select class="select" id="f-t-rol" style="width:100%;">
+      <option value="seccion" ${t.rol==='seccion'?'selected':''}>Profesor de sección</option>
+      <option value="coordinador" ${t.rol==='coordinador'?'selected':''}>Coordinador FAT</option>
+    </select>
+  </div>
+  <div class="field"><label>Sección (si aplica)</label>
+    <select class="select" id="f-t-seccion" style="width:100%;">
+      <option value="">—</option>
+      ${DB.sections.map(s=>`<option value="${s.id}" ${(u&&u.sectionId===s.id)?'selected':''}>${esc(s.nombre)}</option>`).join('')}
+    </select>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>Usuario</label><input class="input" id="f-t-username" value="${esc(u?u.username:'')}" placeholder="ej. prof.nombre"></div>
+    <div class="field"><label>Contraseña ${t.id?'(dejar en blanco para no cambiarla)':''}</label><input class="input" type="password" id="f-t-password" value="" placeholder="${t.id?'••••••••':'Contraseña de acceso'}"></div>
+  </div>`;
+}
+
+function rotationFormHtml(r){
+  const wk = currentWeekOf(DB.students.find(s=>s.id===r.studentId));
+  return `
+  <div class="kv" style="margin-bottom:12px;">
+    <dt>Alumno</dt><dd>${esc(studentName(r.studentId))}</dd>
+    <dt>Sección</dt><dd>${esc(sectionName(r.sectionId))}</dd>
+    <dt>Período</dt><dd>${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</dd>
+  </div>
+  <div class="tabs" id="rot-tabs">
+    <div class="tab active" data-tab="general">${icon('sliders','icon-sm')} General</div>
+    <div class="tab" data-tab="semanal">${icon('file','icon-sm')} Informe semanal</div>
+    <div class="tab" data-tab="final">${icon('award','icon-sm')} Informe final</div>
+  </div>
+  <div data-tabpanel="general">
+    <div class="field"><label>Plan de enseñanza</label><textarea class="input" id="f-r-plan">${esc(r.plan||'')}</textarea></div>
+    <div class="field"><label>Actividades realizadas</label><textarea class="input" id="f-r-actividades">${esc(r.actividades||'')}</textarea></div>
+    <div class="field"><label>Observaciones</label><textarea class="input" id="f-r-observaciones">${esc(r.observaciones||'')}</textarea></div>
+  </div>
+  <div data-tabpanel="semanal" style="display:none;">
+    <div class="field-row">
+      <div class="field"><label>Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-r-sem-num" value="${wk}"></div>
+      <div class="field"><label>Fecha</label><input class="input" type="date" id="f-r-sem-fecha" value="${todayISO()}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Nota de la semana (1-10, opcional)</label><input class="input" type="number" min="1" max="10" id="f-r-sem-nota" placeholder="Sin nota esta semana"></div>
+      <div class="field" style="display:flex; align-items:flex-end; gap:8px; padding-bottom:9px;">
+        <label style="display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; margin-bottom:0; cursor:pointer;">
+          <input type="checkbox" id="f-r-sem-ausente" style="width:16px; height:16px;"> Alumno ausente esta semana
+        </label>
+      </div>
+    </div>
+    <div class="field"><label>Texto del informe / observaciones</label><textarea class="input" id="f-r-sem-texto"></textarea></div>
+    <button class="btn btn-sm" type="button" data-action="add-informe-semanal" data-id="${r.id}">${icon('plus','icon-sm')} Agregar registro semanal</button>
+    ${r.informesSemanales.length? `<ul class="mono-list" style="margin-top:10px;">${r.informesSemanales.slice().sort((a,b)=>a.semana-b.semana).map(i=>`<li><span>Semana ${i.semana}${i.ausente?' · <span class="badge badge-red" style="margin-left:2px;">Ausente</span>':''}${i.nota!=null?' · <span class="badge badge-accent" style="margin-left:2px;">Nota '+i.nota+'</span>':''}${i.texto?': '+esc(i.texto):''}${i.profesorNombre?' <span class="cell-muted">('+esc(i.profesorNombre)+')</span>':''}</span><span class="cell-muted">${fmtDate(i.fecha)}</span></li>`).join('')}</ul>`:''}
+  </div>
+  <div data-tabpanel="final" style="display:none;">
+    <div class="field"><label>Informe final</label><textarea class="input" id="f-r-final">${esc(r.informeFinal||'')}</textarea></div>
+    <div class="field-row">
+      <div class="field">
+        <label>Promedio de esta sección</label>
+        <div class="input" style="background:var(--surface-2); display:flex; align-items:center; font-weight:700;">${rotationAvg(r)!=null? rotationAvg(r).toFixed(1) : '— (sin notas semanales cargadas)'}</div>
+      </div>
+      <div class="field"><label>Estado de la rotación</label>
+        <select class="select" id="f-r-status" style="width:100%;">
+          <option value="pendiente" ${r.status==='pendiente'?'selected':''}>Pendiente</option>
+          <option value="en_curso" ${r.status==='en_curso'?'selected':''}>En curso</option>
+          <option value="finalizada" ${r.status==='finalizada'?'selected':''}>Finalizada</option>
+        </select>
+      </div>
+    </div>
+    <p class="help-text">El promedio se calcula solo con las notas semanales cargadas en la pestaña "Informe semanal". Si finalizás la rotación sin ninguna nota, se genera automáticamente un registro en Contenidos Pendientes.</p>
+    <div class="field"><label>Comentarios</label><textarea class="input" id="f-r-comentarios">${esc(r.comentarios||'')}</textarea></div>
+    <div class="field">
+      <label>Documento adjunto (opcional)</label>
+      <label class="file-drop" for="f-r-file" id="f-r-file-label">
+        ${icon('upload')}
+        <div id="f-r-file-drop-text">Hacé clic para seleccionar un archivo o arrastralo aquí</div>
+      </label>
+      <input type="file" id="f-r-file" style="display:none;">
+      <input type="hidden" id="f-r-file-name" value="${esc(r.attachmentName||'')}">
+      <input type="hidden" id="f-r-file-url" value="${esc(r.attachmentUrl||'')}">
+      <div id="f-r-file-chip">${r.attachmentUrl? `<a class="file-chip" href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener" style="text-decoration:none;">${icon('paperclip','icon-sm')} ${esc(r.attachmentName||'Ver archivo')}</a>` : (r.attachmentName? `<div class="file-chip">${icon('paperclip','icon-sm')} ${esc(r.attachmentName)}</div>` : '')}</div>
+      <p class="help-text">El archivo se sube a Cloudinary y queda con un enlace real para descargar o ver.</p>
+    </div>
+  </div>
+  `;
+}
+
+function guidelinesFormHtml(){
+  return `<div class="field"><label>Lineamientos generales</label><textarea class="input" id="f-lineamientos" style="min-height:140px;">${esc(DB.config.lineamientos)}</textarea></div>`;
+}
+
+function pendienteFormHtml(){
+  const isProf = session.role==='seccion';
+  const availableSections = isProf? DB.sections.filter(s=>s.id===session.sectionId) : DB.sections;
+  const studentsInSection = (secId)=> DB.students.filter(s=> rotationsOf(s.id).some(r=>r.sectionId===secId));
+  return `
+  <div class="field"><label>Sección</label>
+    <select class="select" id="f-pend-seccion" style="width:100%;" ${isProf?'disabled':''}>
+      ${availableSections.map(s=>`<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}
+    </select>
+  </div>
+  <div class="field"><label>Alumno</label>
+    <select class="select" id="f-pend-alumno" style="width:100%;">
+      ${(isProf? studentsInSection(session.sectionId) : DB.students).map(s=>`<option value="${s.id}">${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}
+    </select>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>Semana (opcional)</label><input class="input" type="number" min="1" id="f-pend-semana"></div>
+    <div class="field"><label>Motivo</label><input class="input" id="f-pend-motivo" placeholder="ej. Ausencia prolongada"></div>
+  </div>
+  <div class="field"><label>Contenido pendiente</label><textarea class="input" id="f-pend-contenido" placeholder="Qué le queda por recuperar al alumno"></textarea></div>
+  `;
+}
+
+/* =========================================================================
+   EVENTS
+   ========================================================================= */
+function render(){
+  const app = document.getElementById('app');
+  document.body.setAttribute('data-theme', ui.theme);
+  if(!session){ app.innerHTML = renderLogin(); attachLoginEvents(); return; }
+  app.innerHTML = renderShell();
+  attachGlobalEvents();
+}
+
+function attachLoginEvents(){
+  const doLogin = async ()=>{
+    const u = document.getElementById('login-user').value;
+    const p = document.getElementById('login-pass').value;
+    if(!u.trim() || !p){ document.getElementById('app').innerHTML = renderLogin('Completá usuario y contraseña.'); attachLoginEvents(); return; }
+    const btn = document.getElementById('login-submit');
+    if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Ingresando…'; }
+    try{
+      await tryLogin(u,p);
+      await loadDB();
+      render();
+    }catch(e){
+      document.getElementById('app').innerHTML = renderLogin(e.message || 'Usuario o contraseña incorrectos.');
+      attachLoginEvents();
+    }
+  };
+  const btn = document.getElementById('login-submit');
+  if(btn) btn.addEventListener('click', doLogin);
+  ['login-user','login-pass'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); doLogin(); } });
+  });
+  const first = document.getElementById('login-user');
+  if(first) first.focus();
+}
+
+let globalEventsAttached = false;
+function attachGlobalEvents(){
+  const app = document.getElementById('app');
+
+  const search = document.getElementById('global-search');
+  if(search){
+    search.addEventListener('input', e=>{ ui.search = e.target.value; ui.page.students=1; if(ui.view!=='students') ui.view='students'; render(); document.getElementById('global-search').focus(); document.getElementById('global-search').setSelectionRange(999,999); });
+  }
+
+  if(globalEventsAttached) return; // el #app persiste entre renders (solo cambia su innerHTML);
+  globalEventsAttached = true;      // sin este guard, cada render() apilaría un listener más.
+
+  app.addEventListener('click', async (e)=>{
+    const t = e.target.closest('[data-action]');
+    if(!t) return;
+    const action = t.getAttribute('data-action');
+    const id = t.getAttribute('data-id');
+
+    if(action==='nav'){ ui.view = t.getAttribute('data-view'); ui.notifOpen=false; render(); }
+    else if(action==='toggle-theme'){ ui.theme = ui.theme==='light'?'dark':'light'; render(); }
+    else if(action==='toggle-notif'){ ui.notifOpen = !ui.notifOpen; render(); }
+    else if(action==='toggle-user-menu'){ ui.userMenuOpen = !ui.userMenuOpen; render(); }
+    else if(action==='toggle-sidebar'){ ui.sidebarOpen = !ui.sidebarOpen; render(); }
+    else if(action==='logout'){ logout(); render(); }
+    else if(action==='confirm-yes'){ const cb = ui.confirm && ui.confirm.onConfirm; ui.confirm=null; if(cb) await cb(); render(); }
+    else if(action==='confirm-no'){ if(e.target===t){ ui.confirm=null; render(); } }
+    else if(action==='open-student'){ ui.selectedStudentId=id; ui.view='student-detail'; render(); }
+    else if(action==='back-students'){ ui.view='students'; render(); }
+    else if(action==='new-student'){ ui.modal={type:'student-form', data:null}; render(); }
+    else if(action==='edit-student'){ ui.modal={type:'student-form', data:DB.students.find(s=>s.id===id)}; render(); }
+    else if(action==='delete-student'){
+      const stForDel = DB.students.find(s=>s.id===id);
+      askConfirm({
+        title:'Eliminar alumno',
+        message:'¿Eliminar a '+(stForDel?stForDel.nombre+' '+stForDel.apellido:'este alumno')+' y todas sus rotaciones? Esta acción no se puede deshacer.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{
+            await apiFetch('DELETE', '/api/students/'+id);
+            await loadDB(); ui.view='students'; toast('Alumno eliminado');
+          }catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
+        }
+      });
+    }
+    else if(action==='new-section'){ ui.modal={type:'section-form', data:null}; render(); }
+    else if(action==='edit-section'){ ui.modal={type:'section-form', data:DB.sections.find(s=>s.id===id)}; render(); }
+    else if(action==='delete-section'){
+      const secForDel = DB.sections.find(s=>s.id===id);
+      const affected = DB.rotations.filter(r=>r.sectionId===id).length;
+      askConfirm({
+        title:'Eliminar sección',
+        message:'¿Eliminar "'+(secForDel?secForDel.nombre:'')+'"?'+(affected? ' Tiene '+affected+' rotación(es) asociadas: se eliminarán también esos registros de esa sección en el historial de los alumnos.' : ' No tiene rotaciones asociadas.')+' Esta acción no se puede deshacer.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{
+            await apiFetch('DELETE', '/api/sections/'+id+'?force=true');
+            await loadDB(); toast('Sección eliminada');
+          }catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
+        }
+      });
+    }
+    else if(action==='move-section'){
+      const dir = t.getAttribute('data-dir');
+      const sorted = DB.sections.slice().sort((a,b)=>a.orden-b.orden);
+      const idx = sorted.findIndex(s=>s.id===id);
+      const swapWith = dir==='up'? idx-1 : idx+1;
+      if(swapWith<0 || swapWith>=sorted.length) return;
+      const tmp = sorted[idx]; sorted[idx]=sorted[swapWith]; sorted[swapWith]=tmp;
+      try{
+        await apiFetch('PUT', '/api/sections-order', { order: sorted.map(s=>s.id) });
+        await loadDB(); render();
+      }catch(e){ toast(e.message||'No se pudo reordenar', 'red'); }
+    }
+    else if(action==='new-group'){ ui.modal={type:'group-form', data:null}; render(); }
+    else if(action==='edit-group'){ ui.modal={type:'group-form', data:(DB.groups||[]).find(g=>g.id===id)}; render(); }
+    else if(action==='delete-group'){
+      const gForDel = (DB.groups||[]).find(g=>g.id===id);
+      const affected = DB.students.filter(s=>s.groupId===id).length;
+      askConfirm({
+        title:'Eliminar grupo',
+        message:'¿Eliminar "'+(gForDel?gForDel.nombre:'')+'"?'+(affected? ' '+affected+' alumno(s) quedarán sin grupo asignado.':''),
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{
+            await apiFetch('DELETE', '/api/groups/'+id);
+            await loadDB(); toast('Grupo eliminado');
+          }catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
+        }
+      });
+    }
+    else if(action==='new-teacher'){ ui.modal={type:'teacher-form', data:null}; render(); }
+    else if(action==='edit-teacher'){ ui.modal={type:'teacher-form', data:DB.teachers.find(x=>x.id===id)}; render(); }
+    else if(action==='delete-teacher'){
+      const tForDel = DB.teachers.find(x=>x.id===id);
+      askConfirm({
+        title:'Eliminar profesor',
+        message:'¿Eliminar a '+(tForDel?tForDel.nombre:'este profesor')+'? Se quitará también su usuario de acceso.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{
+            await apiFetch('DELETE', '/api/teachers/'+id);
+            await loadDB(); toast('Profesor eliminado');
+          }catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
+        }
+      });
+    }
+    else if(action==='edit-rotation'){ ui.modal={type:'rotation-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
+    else if(action==='edit-guidelines'){ ui.modal={type:'guidelines-form', data:null}; render(); }
+    else if(action==='add-consigna'){ ui.modal={type:'consigna-form', data:null}; render(); }
+    else if(action==='add-objetivo'){ ui.modal={type:'objetivo-form', data:null}; render(); }
+    else if(action==='new-pendiente'){ ui.modal={type:'pendiente-form', data:null}; render(); }
+    else if(action==='save-nota-aprobacion'){
+      const n = Number(document.getElementById('cfg-nota-aprobacion').value);
+      try{ await apiFetch('PUT','/api/config',{notaAprobacion:n}); await loadDB(); render(); toast('Nota de aprobación actualizada'); }
+      catch(e){ toast(e.message||'No se pudo guardar','red'); }
+    }
+    else if(action==='del-consigna'){ try{ await apiFetch('DELETE','/api/consignas/'+id); await loadDB(); render(); }catch(e){ toast(e.message||'Error','red'); } }
+    else if(action==='del-objetivo'){ try{ await apiFetch('DELETE','/api/objetivos/'+id); await loadDB(); render(); }catch(e){ toast(e.message||'Error','red'); } }
+    else if(action==='close-modal' || action==='close-modal-bg'){ if(action==='close-modal-bg' && e.target!==t){ /* clic dentro del modal, no cerrar */ } else { ui.modal=null; render(); } }
+    else if(action==='add-informe-semanal'){ addInformeSemanal(id); }
+    else if(action==='export-student-pdf'){ exportStudentPDF(id); }
+    else if(action==='export-all-excel'){ exportAllExcel(); }
+    else if(action==='export-grades-excel'){ exportGradesExcel(); }
+    else if(action==='export-all-pdf'){ exportAllPDF(); }
+    else if(action==='submit-modal'){ await submitModal(action, t.getAttribute('data-type'), t.getAttribute('data-id')); }
+    else if(action==='sort-th'){
+      const table = t.getAttribute('data-table'); const key = t.getAttribute('data-key');
+      const cur = ui.sort[table];
+      if(cur && cur.key===key){ cur.dir = cur.dir==='asc'?'desc':'asc'; } else { ui.sort[table] = {key, dir:'asc'}; }
+      ui.page[table] = 1; render();
+    }
+    else if(action==='page'){
+      const table = t.getAttribute('data-table'); const dir = t.getAttribute('data-dir'); const pnum = t.getAttribute('data-page');
+      let cur = ui.page[table]||1;
+      if(pnum!=null){ cur = Number(pnum); }
+      else if(dir==='prev'){ cur = Math.max(1,cur-1); }
+      else if(dir==='next'){ cur = cur+1; }
+      ui.page[table] = cur; render();
+    }
+    else if(t.hasAttribute('data-tab')){
+      const tabpanels = app.querySelectorAll('[data-tabpanel]');
+      const tabs = app.querySelectorAll('[data-tab]');
+      tabs.forEach(tb=>tb.classList.remove('active'));
+      t.classList.add('active');
+      const target = t.getAttribute('data-tab');
+      tabpanels.forEach(p=>{ p.style.display = p.getAttribute('data-tabpanel')===target ? '' : 'none'; });
+    }
+  });
+
+  app.addEventListener('change', (e)=>{
+    const t = e.target;
+    if(t.matches('[data-action="filter-curso"]')){ ui.filters.curso = t.value; ui.page.students=1; render(); }
+    else if(t.matches('[data-action="filter-estado"]')){ ui.filters.estado = t.value; ui.page.students=1; render(); }
+    else if(t.matches('[data-action="filter-seccion"]')){ ui.filters.seccion = t.value; ui.page.students=1; render(); }
+    else if(t.matches('[data-action="filter-grupo"]')){ ui.filters.grupo = t.value; ui.page.students=1; render(); }
+    else if(t.matches('[data-action="filter-rot-seccion"]')){ ui.filters.rotSeccion = t.value; ui.page.rotations=1; render(); }
+    else if(t.matches('[data-action="filter-rot-estado"]')){ ui.filters.rotEstado = t.value; ui.page.rotations=1; render(); }
+    else if(t.matches('[data-action="pendiente-estado"]')){
+      const id = t.getAttribute('data-id'); const estado = t.value;
+      apiFetch('PUT', '/api/pendientes/'+id, { estado }).then(async ()=>{ await loadDB(); render(); toast('Estado actualizado'); }).catch(e=> toast(e.message||'No se pudo actualizar', 'red'));
+    }
+    else if(t.id==='f-r-file'){
+      const f = t.files && t.files[0];
+      if(!f) return;
+      const holder = document.getElementById('f-r-file-chip');
+      if(holder) holder.innerHTML = '<span class="cell-muted" style="font-size:12.5px;"><span class="spinner spinner-accent" style="width:12px;height:12px;"></span> Subiendo '+esc(f.name)+'…</span>';
+      (async ()=>{
+        try{
+          const fd = new FormData();
+          fd.append('file', f);
+          const res = await fetch(API_BASE+'/api/upload', { method:'POST', headers:{ Authorization:'Bearer '+authToken }, body: fd });
+          const data = await res.json();
+          if(!res.ok) throw new Error(data.error || 'No se pudo subir el archivo');
+          document.getElementById('f-r-file-name').value = data.name;
+          document.getElementById('f-r-file-url').value = data.url;
+          if(holder) holder.innerHTML = '<a class="file-chip" href="'+esc(data.url)+'" target="_blank" rel="noopener" style="text-decoration:none;">'+icon('paperclip','icon-sm')+' '+esc(data.name)+'</a>';
+          toast('Archivo subido');
+        }catch(err){
+          if(holder) holder.innerHTML = '';
+          toast(err.message || 'No se pudo subir el archivo', 'red');
+        }
+      })();
+    }
+  });
+}
+
+async function addInformeSemanal(rotId){
+  const sem = Number(document.getElementById('f-r-sem-num').value);
+  const fecha = document.getElementById('f-r-sem-fecha').value;
+  const texto = document.getElementById('f-r-sem-texto').value.trim();
+  const notaVal = document.getElementById('f-r-sem-nota').value;
+  const ausente = document.getElementById('f-r-sem-ausente').checked;
+  if(!texto && !notaVal && !ausente){ toast('Cargá al menos un texto, una nota o marcá ausencia','red'); return; }
+  try{
+    await apiFetch('POST', '/api/rotations/'+rotId+'/weekly-report', {
+      semana:sem, texto, fecha, nota: notaVal===''? null : Number(notaVal), ausente,
+      motivo: ausente? 'Ausente en la semana '+sem : undefined
+    });
+    await loadDB();
+    ui.modal = {type:'rotation-form', data:DB.rotations.find(r=>r.id===rotId)};
+    render();
+    toast('Registro semanal agregado');
+  }catch(e){ toast(e.message||'No se pudo agregar el registro', 'red'); }
+}
+
+async function submitModal(action, type, id){
+  try{
+    if(type==='student-form'){
+      const data = {
+        nombre: val('f-nombre'), apellido: val('f-apellido'), dni: val('f-dni'), legajo: val('f-legajo'),
+        curso: val('f-curso'), division: val('f-division'), fechaInicio: val('f-fecha'), estado: val('f-estado'),
+        groupId: val('f-grupo')||null
+      };
+      if(!data.nombre || !data.apellido || !data.dni){ toast('Completá nombre, apellido y DNI','red'); return; }
+      if(id){
+        await apiFetch('PUT', '/api/students/'+id, data);
+        toast('Alumno actualizado');
+      } else {
+        await apiFetch('POST', '/api/students', data);
+        toast('Alumno creado con sus rotaciones');
+      }
+      await loadDB(); ui.modal=null; render();
+    }
+    else if(type==='section-form'){
+      const nombre = val('f-sec-nombre'); const teacherId = val('f-sec-teacher')||null; const weeks = Number(val('f-sec-weeks'))||5;
+      if(!nombre){ toast('Ponele un nombre a la sección','red'); return; }
+      if(id) await apiFetch('PUT', '/api/sections/'+id, { nombre, teacherId, weeks });
+      else await apiFetch('POST', '/api/sections', { nombre, teacherId, weeks });
+      await loadDB(); ui.modal=null; render(); toast(id? 'Sección actualizada':'Sección creada');
+    }
+    else if(type==='group-form'){
+      const nombre = val('f-grupo-nombre');
+      if(!nombre){ toast('Ponele un nombre al grupo','red'); return; }
+      if(id) await apiFetch('PUT', '/api/groups/'+id, { nombre });
+      else await apiFetch('POST', '/api/groups', { nombre });
+      await loadDB(); ui.modal=null; render(); toast(id? 'Grupo actualizado':'Grupo creado');
+    }
+    else if(type==='teacher-form'){
+      const nombre = val('f-t-nombre'); const rol = val('f-t-rol'); const sectionId = val('f-t-seccion')||null;
+      const username = val('f-t-username'); const password = val('f-t-password');
+      if(!nombre || !username){ toast('Completá nombre y usuario','red'); return; }
+      if(!id && !password){ toast('La contraseña es obligatoria para un profesor nuevo','red'); return; }
+      if(id) await apiFetch('PUT', '/api/teachers/'+id, { nombre, rol, sectionId, username, password: password||undefined });
+      else await apiFetch('POST', '/api/teachers', { nombre, rol, sectionId, username, password });
+      await loadDB(); ui.modal=null; render(); toast('Profesor guardado');
+    }
+    else if(type==='rotation-form'){
+      const payload = {
+        plan: val('f-r-plan'), actividades: val('f-r-actividades'), observaciones: val('f-r-observaciones'),
+        informeFinal: val('f-r-final'), comentarios: val('f-r-comentarios'),
+        status: val('f-r-status'), attachmentName: val('f-r-file-name')||undefined, attachmentUrl: val('f-r-file-url')||undefined
+      };
+      await apiFetch('PUT', '/api/rotations/'+id, payload);
+      await loadDB(); ui.modal=null; render(); toast('Rotación actualizada');
+    }
+    else if(type==='guidelines-form'){
+      await apiFetch('PUT', '/api/guidelines', { lineamientos: val('f-lineamientos') });
+      await loadDB(); ui.modal=null; render(); toast('Lineamientos publicados');
+    }
+    else if(type==='consigna-form'){
+      const texto = val('f-consigna');
+      if(texto) await apiFetch('POST', '/api/consignas', { texto });
+      await loadDB(); ui.modal=null; render();
+    }
+    else if(type==='objetivo-form'){
+      const sem = Number(val('f-obj-semana'))||1;
+      const texto = val('f-obj-texto');
+      if(texto) await apiFetch('POST', '/api/objetivos', { semana:sem, texto });
+      await loadDB(); ui.modal=null; render();
+    }
+    else if(type==='pendiente-form'){
+      const sectionId = val('f-pend-seccion'); const studentId = val('f-pend-alumno');
+      const semana = val('f-pend-semana'); const motivo = val('f-pend-motivo'); const contenido = val('f-pend-contenido');
+      if(!studentId || !sectionId || !motivo){ toast('Completá alumno, sección y motivo','red'); return; }
+      await apiFetch('POST', '/api/pendientes', { studentId, sectionId, semana: semana?Number(semana):null, motivo, contenido });
+      await loadDB(); ui.modal=null; render(); toast('Registro creado');
+    }
+  }catch(e){
+    toast(e.message || 'No se pudo guardar', 'red');
+  }
+}
+function val(id){ const e=document.getElementById(id); return e? e.value.trim() : ''; }
+
+/* =========================================================================
+   EXPORTS
+   ========================================================================= */
+function exportStudentPDF(studentId){
+  const s = DB.students.find(x=>x.id===studentId);
+  if(!s || !window.jspdf){ toast('No se pudo generar el PDF','red'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let y = 18;
+  doc.setFontSize(16); doc.text('Informe FAT — '+s.nombre+' '+s.apellido, 14, y); y+=8;
+  doc.setFontSize(10); doc.text('Legajo: '+s.legajo+'   DNI: '+s.dni+'   Curso: '+s.curso+' "'+s.division+'"', 14, y); y+=10;
+  rotationsOf(s.id).forEach(r=>{
+    if(y>260){ doc.addPage(); y=18; }
+    doc.setFontSize(12); doc.text(r.orden+'. '+sectionName(r.sectionId)+' ('+fmtDate(r.startDate)+' - '+fmtDate(r.endDate)+')', 14, y); y+=6;
+    doc.setFontSize(9);
+    const lines = [
+      'Profesor: '+teacherName(r.teacherId)+'   Estado: '+r.status+'   Promedio: '+(rotationAvg(r)==null?'-':rotationAvg(r).toFixed(1)),
+      r.plan? 'Plan: '+r.plan : '',
+      r.actividades? 'Actividades: '+r.actividades : '',
+      r.observaciones? 'Observaciones: '+r.observaciones : '',
+      r.informeFinal? 'Informe final: '+r.informeFinal : '',
+    ].filter(Boolean);
+    lines.forEach(line=>{
+      const wrapped = doc.splitTextToSize(line, 180);
+      wrapped.forEach(w=>{ if(y>270){ doc.addPage(); y=18; } doc.text(w,14,y); y+=5; });
+    });
+    y+=4;
+  });
+  doc.save('FAT_'+s.apellido+'_'+s.nombre+'.pdf');
+}
+
+function exportAllPDF(){
+  if(!window.jspdf){ toast('No se pudo generar el PDF','red'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(16); doc.text('Informe general FAT', 14, 18);
+  doc.setFontSize(9); doc.text('Generado el '+fmtDate(todayISO()), 14, 25);
+  let y=35;
+  doc.setFontSize(11);
+  DB.students.forEach(s=>{
+    if(y>270){ doc.addPage(); y=18; }
+    doc.text(s.nombre+' '+s.apellido+' — Legajo '+s.legajo+' — Promedio: '+(studentAvg(s.id)||'-')+' — Estado: '+s.estado, 14, y);
+    y+=7;
+  });
+  doc.save('FAT_informe_general.pdf');
+}
+
+function exportAllExcel(){
+  if(!window.XLSX){ toast('No se pudo generar el Excel','red'); return; }
+  const rows = DB.students.map(s=>({
+    Nombre:s.nombre, Apellido:s.apellido, DNI:s.dni, Legajo:s.legajo, Curso:s.curso, División:s.division,
+    'Fecha de inicio':s.fechaInicio, Estado:s.estado, 'Semana actual': s.estado==='activo'?currentWeekOf(s):'-',
+    'Sección actual': currentRotationOf(s.id)? sectionName(currentRotationOf(s.id).sectionId):'-',
+    Promedio: studentAvg(s.id)||'-'
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Alumnos');
+  XLSX.writeFile(wb, 'FAT_alumnos.xlsx');
+}
+
+function exportGradesExcel(){
+  if(!window.XLSX){ toast('No se pudo generar el Excel','red'); return; }
+  const rows = DB.rotations.map(r=>({
+    Alumno: studentName(r.studentId), Sección: sectionName(r.sectionId), Profesor: teacherName(r.teacherId),
+    Estado: r.status, Promedio: rotationAvg(r)==null?'':rotationAvg(r).toFixed(1),
+    Inicio:r.startDate, Fin:r.endDate
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Calificaciones');
+  XLSX.writeFile(wb, 'FAT_calificaciones.xlsx');
+}
+
+/* =========================================================================
+   INIT
+   ========================================================================= */
+async function init(){
+  loadSession();
+  if(session && authToken){
+    try{
+      await loadDB();
+    }catch(e){
+      console.error('No se pudo restaurar la sesión', e);
+      authToken=null; session=null;
+      localStorage.removeItem('fat_token'); localStorage.removeItem('fat_session');
+    }
+  }
+  render();
+}
+init().catch(e=>{
+  console.error('init failed', e);
+  document.getElementById('app').innerHTML = `
+  <div class="login-wrap">
+    <div class="login-card" style="max-width:420px; text-align:center;">
+      <div class="login-mark" style="margin:0 auto 12px;">FAT</div>
+      <h2 style="font-size:16px;">No se pudo conectar con el servidor</h2>
+      <p class="help-text">Verificá que el backend (Express + SQLite) esté corriendo y volvé a cargar la página.</p>
+    </div>
+  </div>`;
+});
+</script>
+</body>
+</html>
