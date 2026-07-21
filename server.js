@@ -102,9 +102,10 @@ app.get('/api/state', auth, h(async (req, res) => {
   const consignas = await allDocs('consignas');
   const objetivos = await allDocs('objetivos');
   const groups = await allDocs('groups');
+  const pendientes = await allDocs('pendientes');
   const activityLog = await getActivityLog(40);
   const users = (await allDocs('users')).map(u => ({ id: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId, sectionId: u.sectionId }));
-  res.json({ config, teachers, sections, students, rotations, consignas, objetivos, groups, activityLog, users });
+  res.json({ config, teachers, sections, students, rotations, consignas, objetivos, groups, pendientes, activityLog, users });
 }));
 
 /* ---------------------------- students ---------------------------- */
@@ -293,11 +294,10 @@ app.put('/api/rotations/:id', auth, h(async (req, res) => {
   const r = await docData('rotations', req.params.id);
   if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
   if (!canEditRotation(req.user, r)) return res.status(403).json({ error: 'No tenés permiso para editar esta rotación' });
-  const { plan, actividades, observaciones, informeFinal, comentarios, calificacion, status, attachmentName, attachmentUrl } = req.body || {};
-  if (calificacion != null && (calificacion < 1 || calificacion > 10)) return res.status(400).json({ error: 'La calificación debe estar entre 1 y 10' });
+  const { plan, actividades, observaciones, informeFinal, comentarios, status, attachmentName, attachmentUrl } = req.body || {};
   const update = {
     plan: plan || '', actividades: actividades || '', observaciones: observaciones || '',
-    informeFinal: informeFinal || '', comentarios: comentarios || '', calificacion: calificacion ?? null, status
+    informeFinal: informeFinal || '', comentarios: comentarios || '', status
   };
   if (attachmentName) update.attachmentName = attachmentName;
   if (attachmentUrl) update.attachmentUrl = attachmentUrl;
@@ -305,7 +305,20 @@ app.put('/api/rotations/:id', auth, h(async (req, res) => {
   const student = await docData('students', r.studentId);
   const section = await docData('sections', r.sectionId);
   await logActivity(`Se actualizó la rotación de ${student.nombre} ${student.apellido} en ${section.nombre}.`);
-  if (r.status !== 'finalizada' && status === 'finalizada') await logActivity(`${student.nombre} ${student.apellido} finalizó la rotación en ${section.nombre}.`);
+  if (r.status !== 'finalizada' && status === 'finalizada') {
+    await logActivity(`${student.nombre} ${student.apellido} finalizó la rotación en ${section.nombre}.`);
+    const notas = (r.informesSemanales || []).filter(e => e.nota != null);
+    if (!notas.length) {
+      const lastSemana = (r.informesSemanales || []).reduce((max, e) => Math.max(max, e.semana || 0), 0);
+      await db.collection('pendientes').doc(uid('p')).set({
+        studentId: r.studentId, sectionId: r.sectionId, teacherId: r.teacherId,
+        semana: lastSemana || r.orden, motivo: 'Sección finalizada sin calificaciones cargadas',
+        contenido: 'Revisar el contenido completo de la sección con el alumno', estado: 'pendiente',
+        createdAt: new Date().toISOString()
+      });
+      await logActivity(`Se generó un registro en Contenidos Pendientes para ${student.nombre} ${student.apellido} (${section.nombre}, sin notas).`);
+    }
+  }
   res.json({ ok: true });
 }));
 
@@ -313,17 +326,85 @@ app.post('/api/rotations/:id/weekly-report', auth, h(async (req, res) => {
   const r = await docData('rotations', req.params.id);
   if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
   if (!canEditRotation(req.user, r)) return res.status(403).json({ error: 'No tenés permiso para editar esta rotación' });
-  const { semana, texto, fecha } = req.body || {};
-  if (!texto) return res.status(400).json({ error: 'El texto del informe es obligatorio' });
-  const nuevo = { semana, texto, fecha: fecha || todayISO() };
-  const informesSemanales = [...(r.informesSemanales || []), nuevo];
+  const { semana, texto, fecha, nota, observaciones, ausente, motivo } = req.body || {};
+  if (!texto && nota == null && !ausente) return res.status(400).json({ error: 'Cargá al menos el texto del informe, una nota o marcá ausencia' });
+  if (nota != null && (nota < 1 || nota > 10)) return res.status(400).json({ error: 'La nota debe estar entre 1 y 10' });
+  const nuevo = {
+    semana, texto: texto || '', fecha: fecha || todayISO(),
+    nota: nota ?? null, observaciones: observaciones || '',
+    ausente: !!ausente, profesorId: req.user.teacherId || null, profesorNombre: req.user.nombre
+  };
+  const existingList = r.informesSemanales || [];
+  const existingIdx = existingList.findIndex(e => e.semana === semana);
+  const informesSemanales = existingIdx >= 0
+    ? existingList.map((e, i) => i === existingIdx ? nuevo : e)
+    : [...existingList, nuevo];
   await db.collection('rotations').doc(req.params.id).update({ informesSemanales });
   const student = await docData('students', r.studentId);
-  await logActivity(`Se cargó el informe semanal ${semana} de ${student.nombre} ${student.apellido}.`);
+  await logActivity(`Se cargó el registro semanal ${semana} de ${student.nombre} ${student.apellido}.`);
+
+  const wasAlreadyAusente = existingIdx >= 0 && existingList[existingIdx].ausente;
+  if (ausente && !wasAlreadyAusente) {
+    const section = await docData('sections', r.sectionId);
+    await db.collection('pendientes').doc(uid('p')).set({
+      studentId: r.studentId, sectionId: r.sectionId, teacherId: r.teacherId, semana,
+      motivo: motivo || 'Ausente en la semana ' + semana,
+      contenido: 'Contenido de la semana ' + semana + (section ? ` (${section.nombre})` : ''),
+      estado: 'pendiente', createdAt: new Date().toISOString()
+    });
+  }
   res.status(201).json({ ok: true });
 }));
 
+/* ---------------------------- contenidos pendientes ---------------------------- */
+function canTouchPendiente(user, p) {
+  if (user.role === 'admin') return true;
+  if (user.role === 'seccion') return p.teacherId === user.teacherId;
+  return false;
+}
+app.post('/api/pendientes', auth, h(async (req, res) => {
+  const { studentId, sectionId, semana, motivo, contenido } = req.body || {};
+  if (!studentId || !sectionId || !motivo) return res.status(400).json({ error: 'Faltan campos obligatorios' });
+  const section = await docData('sections', sectionId);
+  if (req.user.role === 'seccion' && section && section.teacherId !== req.user.teacherId) {
+    return res.status(403).json({ error: 'Solo podés registrar pendientes de tu propia sección' });
+  }
+  if (req.user.role !== 'admin' && req.user.role !== 'seccion') return res.status(403).json({ error: 'No tenés permiso para esta acción' });
+  const id = uid('p');
+  await db.collection('pendientes').doc(id).set({
+    studentId, sectionId, teacherId: section ? section.teacherId : null, semana: semana || null,
+    motivo, contenido: contenido || '', estado: 'pendiente', createdAt: new Date().toISOString()
+  });
+  const student = await docData('students', studentId);
+  await logActivity(`Se registró un contenido pendiente para ${student ? student.nombre + ' ' + student.apellido : 'un alumno'}.`);
+  res.status(201).json({ id });
+}));
+
+app.put('/api/pendientes/:id', auth, h(async (req, res) => {
+  const p = await docData('pendientes', req.params.id);
+  if (!p) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (!canTouchPendiente(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para editar este registro' });
+  const { estado } = req.body || {};
+  if (!['pendiente', 'en_recuperacion', 'completado'].includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
+  await db.collection('pendientes').doc(req.params.id).update({ estado });
+  res.json({ ok: true });
+}));
+
+app.delete('/api/pendientes/:id', auth, requireRole('admin'), h(async (req, res) => {
+  await db.collection('pendientes').doc(req.params.id).delete();
+  res.json({ ok: true });
+}));
+
 /* ---------------------------- config y lineamientos ---------------------------- */
+
+app.put('/api/config', auth, requireRole('admin'), h(async (req, res) => {
+  const { notaAprobacion } = req.body || {};
+  const n = Number(notaAprobacion);
+  if (!n || n < 1 || n > 10) return res.status(400).json({ error: 'La nota de aprobación debe estar entre 1 y 10' });
+  await db.collection('config').doc('main').update({ notaAprobacion: n });
+  await logActivity('Se actualizó la nota mínima de aprobación.');
+  res.json({ ok: true });
+}));
 
 app.put('/api/guidelines', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
   await db.collection('config').doc('main').update({ lineamientos: req.body.lineamientos || '' });
