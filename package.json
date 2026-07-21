@@ -1,0 +1,23 @@
+{
+  "name": "fat-backend",
+  "version": "1.0.0",
+  "description": "FAT Manager - backend real con Express + Firestore (Firebase) + Cloudinary",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node check-setup.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.7.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "firebase-admin": "^13.6.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.0.2"
+  }
+}
