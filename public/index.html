@@ -542,7 +542,7 @@ function computeNotifications(){
 async function tryLogin(username, password){
   const data = await apiFetch('POST', '/api/auth/login', { username, password }); // lanza Error si falla
   persistSession(data.token, data.user);
-  ui.view='dashboard';
+  ui.view = data.user.role==='seccion' ? 'teacherHome' : 'dashboard';
   return true;
 }
 function logout(){ authToken=null; session=null; localStorage.removeItem('fat_token'); localStorage.removeItem('fat_session'); ui.view='dashboard'; ui.userMenuOpen=false; render(); }
@@ -637,6 +637,7 @@ function renderShell(){
         </div>
       </div>
       <div class="nav">
+        ${navItem('teacherHome','clock','Mi semana', ['seccion'])}
         ${navItem('dashboard','grid','Dashboard')}
         ${navItem('students','users','Alumnos')}
         ${navItem('sections','tag','Secciones')}
@@ -703,6 +704,7 @@ function renderNotifPanel(notifs){
 function renderView(){
   switch(ui.view){
     case 'dashboard': return renderDashboard();
+    case 'teacherHome': return renderTeacherHome();
     case 'students': return renderStudents();
     case 'student-detail': return renderStudentDetail();
     case 'sections': return renderSections();
@@ -742,6 +744,72 @@ function statCard(label, value, foot, iconName, tone){
     <div class="stat-foot">${foot}</div>
   </div>`;
 }
+
+/* ---------------------------- PORTAL PROFESOR: "Mi semana" ---------------------------- */
+function renderTeacherHome(){
+  const myRotsAll = DB.rotations.filter(r=>r.teacherId===session.teacherId);
+  const myRotsActive = myRotsAll.filter(r=>r.status==='en_curso');
+  const mySection = DB.sections.find(s=>s.teacherId===session.teacherId);
+  const notifs = computeNotifications().filter(n=> myRotsActive.some(r=> n.sub && n.sub.includes(sectionName(r.sectionId))) );
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Hola, ${esc(session.nombre.split(' ')[0])} 👋</h1><p class="page-sub">${mySection? esc(mySection.nombre):'Tu sección'} · ${myRotsActive.length} alumno${myRotsActive.length===1?'':'s'} en curso ahora</p></div>
+  </div>
+
+  <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
+    ${statCard('Alumnos en curso', myRotsActive.length, 'ahora mismo en tu sección', 'users', 'accent')}
+    ${statCard('Semanas sin cargar', myRotsActive.filter(r=>{ const st=DB.students.find(s=>s.id===r.studentId); return st && !r.informesSemanales.some(e=>e.semana===currentWeekOf(st)); }).length, 'esta semana', 'file', 'amber')}
+    ${statCard('Contenidos pendientes', (DB.pendientes||[]).filter(p=>p.teacherId===session.teacherId && p.estado!=='completado').length, 'a resolver', 'alertTriangle', 'red')}
+  </div>
+
+  <div class="section-card">
+    <h3>Tus alumnos esta semana</h3>
+    ${myRotsActive.length? myRotsActive.map(r=>{
+      const st = DB.students.find(s=>s.id===r.studentId);
+      const wk = st? currentWeekOf(st) : r.orden;
+      const thisWeekEntry = r.informesSemanales.find(e=>e.semana===wk);
+      return `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 0; border-bottom:1px solid var(--border);">
+        <div>
+          <div class="cell-strong">${esc(studentName(r.studentId))}</div>
+          <div class="cell-muted" style="font-size:12px;">Semana ${wk} / ${DB.config.totalWeeks}${thisWeekEntry? (thisWeekEntry.ausente? ' · <span class="badge badge-red" style="margin-left:2px;">Ausente</span>' : (thisWeekEntry.nota!=null? ' · <span class="badge badge-accent" style="margin-left:2px;">Nota '+thisWeekEntry.nota+'</span>' : ' · <span class="badge badge-green" style="margin-left:2px;">Cargado</span>')) : ' · <span class="badge badge-amber" style="margin-left:2px;">Sin cargar</span>'}</div>
+        </div>
+        <button class="btn btn-primary btn-sm" data-action="quick-week" data-id="${r.id}">${thisWeekEntry?'Editar semana':'Cargar semana'}</button>
+      </div>`;
+    }).join('') : `<div class="empty-state"><div class="em-icon">${icon('checkCircle')}</div><div class="em-title">No tenés alumnos en curso ahora mismo</div>Revisá "Rotaciones" para ver próximas o finalizadas.</div>`}
+  </div>
+
+  ${notifs.length? `<div class="section-card">
+    <h3>Avisos</h3>
+    ${notifs.map(n=>`<div class="notif-item" style="padding-left:0; padding-right:0;">
+      <div class="notif-ico" style="background:var(--${n.color}-soft); color:var(--${n.color}${n.color==='accent'?'-2':n.color==='green'?'-2':n.color==='red'?'-2':n.color==='amber'?'-2':''});">${icon(n.icon,'icon-sm')}</div>
+      <div class="notif-text"><div class="notif-title">${esc(n.title)}</div><div class="notif-sub">${esc(n.sub)}</div></div>
+    </div>`).join('')}
+  </div>`:''}
+  `;
+}
+function quickWeekFormHtml(r){
+  const st = DB.students.find(s=>s.id===r.studentId);
+  const wk = st? currentWeekOf(st) : r.orden;
+  const existing = r.informesSemanales.find(e=>e.semana===wk);
+  return `
+  <div class="kv" style="margin-bottom:14px;">
+    <dt>Alumno</dt><dd>${esc(studentName(r.studentId))}</dd>
+    <dt>Semana</dt><dd>${wk} / ${DB.config.totalWeeks}</dd>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>Nota (1-10, opcional)</label><input class="input" type="number" min="1" max="10" id="f-qw-nota" value="${existing&&existing.nota!=null?existing.nota:''}" placeholder="Sin nota"></div>
+    <div class="field" style="display:flex; align-items:flex-end; gap:8px; padding-bottom:9px;">
+      <label style="display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; margin-bottom:0; cursor:pointer;">
+        <input type="checkbox" id="f-qw-ausente" ${existing&&existing.ausente?'checked':''} style="width:16px; height:16px;"> Ausente esta semana
+      </label>
+    </div>
+  </div>
+  <div class="field"><label>Actividad realizada / observaciones</label><textarea class="input" id="f-qw-texto">${existing?esc(existing.texto||''):''}</textarea></div>
+  <p class="help-text">Se guarda con la fecha de hoy (${fmtDate(todayISO())}) para la semana ${wk}.</p>
+  `;
+}
+
 
 function renderDashboard(){
   const totalAlumnos = DB.students.length;
@@ -1333,6 +1401,7 @@ function renderModal(){
   else if(m.type==='consigna-form'){ title='Nueva consigna'; body = `<div class="field"><label>Texto</label><textarea class="input" id="f-consigna"></textarea></div>`; }
   else if(m.type==='objetivo-form'){ title='Nuevo objetivo semanal'; body = `<div class="field-row"><div class="field"><label>Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-obj-semana"></div></div><div class="field"><label>Objetivo</label><textarea class="input" id="f-obj-texto"></textarea></div>`; }
   else if(m.type==='pendiente-form'){ title='Nuevo contenido pendiente'; body = pendienteFormHtml(); }
+  else if(m.type==='quick-week-form'){ title='Cargar semana'; body = quickWeekFormHtml(m.data); }
 
   return `
   <div class="modal-overlay" data-action="close-modal-bg">
@@ -1663,6 +1732,7 @@ function attachGlobalEvents(){
     else if(action==='add-consigna'){ ui.modal={type:'consigna-form', data:null}; render(); }
     else if(action==='add-objetivo'){ ui.modal={type:'objetivo-form', data:null}; render(); }
     else if(action==='new-pendiente'){ ui.modal={type:'pendiente-form', data:null}; render(); }
+    else if(action==='quick-week'){ ui.modal={type:'quick-week-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
     else if(action==='save-nota-aprobacion'){
       const n = Number(document.getElementById('cfg-nota-aprobacion').value);
       try{ await apiFetch('PUT','/api/config',{notaAprobacion:n}); await loadDB(); render(); toast('Nota de aprobación actualizada'); }
@@ -1829,6 +1899,20 @@ async function submitModal(action, type, id){
       await apiFetch('POST', '/api/pendientes', { studentId, sectionId, semana: semana?Number(semana):null, motivo, contenido });
       await loadDB(); ui.modal=null; render(); toast('Registro creado');
     }
+    else if(type==='quick-week-form'){
+      const r = DB.rotations.find(x=>x.id===id);
+      const st = DB.students.find(s=>s.id===r.studentId);
+      const wk = st? currentWeekOf(st) : r.orden;
+      const notaVal = val('f-qw-nota');
+      const ausente = document.getElementById('f-qw-ausente').checked;
+      const texto = val('f-qw-texto');
+      if(!texto && !notaVal && !ausente){ toast('Cargá al menos un texto, una nota o marcá ausencia','red'); return; }
+      await apiFetch('POST', '/api/rotations/'+id+'/weekly-report', {
+        semana: wk, texto, fecha: todayISO(), nota: notaVal===''?null:Number(notaVal), ausente,
+        motivo: ausente? 'Ausente en la semana '+wk : undefined
+      });
+      await loadDB(); ui.modal=null; render(); toast('Semana cargada');
+    }
   }catch(e){
     toast(e.message || 'No se pudo guardar', 'red');
   }
@@ -1917,6 +2001,7 @@ async function init(){
   if(session && authToken){
     try{
       await loadDB();
+      if(session.role==='seccion') ui.view = 'teacherHome';
     }catch(e){
       console.error('No se pudo restaurar la sesión', e);
       authToken=null; session=null;
