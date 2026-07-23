@@ -541,8 +541,3 @@ ensureSeed()
   .catch(err => { console.error('[server] No se pudo inicializar Firestore:', err.message); process.exit(1); });
 
 module.exports = app;
-
-  .then(() => app.listen(PORT, () => console.log(`[server] FAT Manager API real corriendo en http://localhost:${PORT}`)))
-  .catch(err => { console.error('[server] No se pudo inicializar Firestore:', err.message); process.exit(1); });
-
-module.exports = app;
