@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -341,7 +341,7 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 }
 </style>
 </head>
-<body data-theme="light">
+<body>
 <div id="app">
   <div class="login-wrap">
     <div class="login-card" style="max-width:380px;">
@@ -608,8 +608,8 @@ function renderStudentPortalPage(){
       </div>
       <div class="topbar-spacer"></div>
       <span class="cell-muted" style="font-size:13px; margin-right:10px;">${esc(SP.student.nombre)} ${esc(SP.student.apellido)}</span>
-      <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
-      <button class="btn btn-sm" data-action="logout">${icon('logout','icon-sm')} Salir</button>
+      <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema" aria-label="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
+      <button class="btn btn-sm" data-action="logout" aria-label="Cerrar sesión">${icon('logout','icon-sm')} Salir</button>
     </div>
     <div class="content" style="max-width:760px; margin:0 auto;">
       <div class="page-head">
@@ -747,16 +747,17 @@ function renderShell(){
         ${ui.userMenuOpen? `<button class="btn btn-sm" style="width:100%;margin-top:8px;" data-action="logout">Cerrar sesión</button>` : ''}
       </div>
     </div>
+    <div class="sidebar-scrim ${ui.sidebarOpen?'show':''}" data-action="close-sidebar"></div>
     <div class="main">
       <div class="topbar">
-        <button class="icon-btn" style="display:none" id="hamburger" data-action="toggle-sidebar">${icon('menu','icon-sm')}</button>
+        <button class="icon-btn" style="display:none" id="hamburger" data-action="toggle-sidebar" aria-label="Abrir menú">${icon('menu','icon-sm')}</button>
         <div class="search-wrap">
           <span class="search-icon">${icon('search','icon-sm')}</span>
           <input class="search-input" id="global-search" placeholder="Buscar alumno por nombre, DNI o legajo…" value="${esc(ui.search)}">
         </div>
         <div class="topbar-spacer"></div>
-        <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
-        <button class="icon-btn" data-action="toggle-notif" title="Notificaciones">${icon('bell','icon-sm')}${notifs.length? `<span class="badge-dot">${notifs.length>9?'9+':notifs.length}</span>`:''}</button>
+        <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema" aria-label="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
+        <button class="icon-btn" data-action="toggle-notif" title="Notificaciones" aria-label="Notificaciones">${icon('bell','icon-sm')}${notifs.length? `<span class="badge-dot">${notifs.length>9?'9+':notifs.length}</span>`:''}</button>
       </div>
       ${ui.notifOpen? renderNotifPanel(notifs) : ''}
       <div class="content">
@@ -907,7 +908,6 @@ function renderDashboard(){
   const notifs = computeNotifications();
   const informesPend = notifs.filter(n=>n.type==='informe'||n.type==='informe-final').length;
   const notasPend = notifs.filter(n=>n.type==='nota').length;
-  const proximas = DB.rotations.filter(r=>{ const d=daysBetween(todayISO(),r.startDate); return r.status==='pendiente' && d>=0 && d<=7; });
   const pctFinalizadas = DB.rotations.length ? Math.round(finalizadas/DB.rotations.length*100) : 0;
 
   const bySection = DB.sections.map(sec=>{
@@ -926,7 +926,6 @@ function renderDashboard(){
     ${statCard('Rotaciones activas', enCurso, 'en curso ahora mismo', 'refresh', 'accent')}
     ${statCard('Informes pendientes', informesPend, 'semanales y finales', 'file', informesPend?'amber':'neutral')}
     ${statCard('Calificaciones pendientes', notasPend, 'rotaciones sin nota', 'award', notasPend?'red':'neutral')}
-    ${statCard('Próximas rotaciones', proximas.length, 'en los próximos 7 días', 'arrowRight', 'accent')}
   </div>
 
   <div class="dash-grid2" style="display:grid; grid-template-columns:1.4fr 1fr; gap:16px;">
@@ -946,21 +945,15 @@ function renderDashboard(){
     </div>
   </div>
 
-  <div class="dash-grid3" style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
-    <div class="section-card">
-      <h3>Próximas rotaciones</h3>
-      ${proximas.length? `<ul class="mono-list">${proximas.map(r=>`<li><span>${esc(studentName(r.studentId))} ${icon('arrowRight','icon-sm')} ${esc(sectionName(r.sectionId))}</span><span class="cell-muted">${fmtDate(r.startDate)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:26px;"><div class="em-icon">${icon('calendar')}</div><div class="em-title">Sin rotaciones próximas</div></div>`}
-    </div>
-    <div class="section-card">
-      <h3>Actividad reciente</h3>
-      ${(DB.activityLog&&DB.activityLog.length)? DB.activityLog.slice(0,6).map(a=>`
-        <div class="activity-item">
-          <div class="activity-dot"></div>
-          <div><div class="activity-text">${esc(a.text)}</div><div class="activity-time">${fmtRelative(a.ts)}</div></div>
-        </div>`).join('') : `<div class="empty-state" style="padding:26px;"><div class="em-icon">${icon('activity')}</div><div class="em-title">Sin actividad reciente</div></div>`}
-    </div>
+  <div class="section-card" style="margin-top:16px;">
+    <h3>Actividad reciente</h3>
+    ${(DB.activityLog&&DB.activityLog.length)? DB.activityLog.slice(0,6).map(a=>`
+      <div class="activity-item">
+        <div class="activity-dot"></div>
+        <div><div class="activity-text">${esc(a.text)}</div><div class="activity-time">${fmtRelative(a.ts)}</div></div>
+      </div>`).join('') : `<div class="empty-state" style="padding:26px;"><div class="em-icon">${icon('activity')}</div><div class="em-title">Sin actividad reciente</div></div>`}
   </div>
-  <style>@media(max-width:880px){.dash-grid2, .dash-grid3{grid-template-columns:1fr !important;}}</style>
+  <style>@media(max-width:880px){.dash-grid2{grid-template-columns:1fr !important;}}</style>
   `;
 }
 
@@ -1196,8 +1189,8 @@ function renderSections(){
             <div class="cell-muted" style="font-size:12px; margin-top:2px;">${esc(teacherName(sec.teacherId))} · ${sec.weeks||5} semana${(sec.weeks||5)===1?'':'s'}</div>
           </div>
           ${session.role==='admin'? `<div style="display:flex; gap:2px;">
-            <button class="btn btn-ghost btn-sm" data-action="move-section" data-id="${sec.id}" data-dir="up" ${idx===0?'disabled':''} title="Subir">↑</button>
-            <button class="btn btn-ghost btn-sm" data-action="move-section" data-id="${sec.id}" data-dir="down" ${idx===sorted.length-1?'disabled':''} title="Bajar">↓</button>
+            <button class="btn btn-ghost btn-sm" data-action="move-section" data-id="${sec.id}" data-dir="up" ${idx===0?'disabled':''} title="Subir" aria-label="Subir ${esc(sec.nombre)}">↑</button>
+            <button class="btn btn-ghost btn-sm" data-action="move-section" data-id="${sec.id}" data-dir="down" ${idx===sorted.length-1?'disabled':''} title="Bajar" aria-label="Bajar ${esc(sec.nombre)}">↓</button>
             <button class="btn btn-ghost btn-sm" data-action="edit-section" data-id="${sec.id}">${icon('edit','icon-sm')}</button>
             <button class="btn btn-ghost btn-sm" data-action="delete-section" data-id="${sec.id}">${icon('trash','icon-sm')}</button>
           </div>`:''}
@@ -1494,7 +1487,7 @@ function renderModal(){
   return `
   <div class="modal-overlay" data-action="close-modal-bg">
     <div class="modal ${wide?'modal-wide':''}">
-      <div class="modal-head"><h3>${title}</h3><button class="icon-btn" data-action="close-modal">${icon('x','icon-sm')}</button></div>
+      <div class="modal-head"><h3>${title}</h3><button class="icon-btn" data-action="close-modal" aria-label="Cerrar">${icon('x','icon-sm')}</button></div>
       <div class="modal-body">${body}</div>
       <div class="modal-foot">
         <button class="btn" data-action="close-modal">Cancelar</button>
@@ -1685,7 +1678,7 @@ function pendienteFormHtml(){
    ========================================================================= */
 function render(){
   const app = document.getElementById('app');
-  document.body.setAttribute('data-theme', ui.theme);
+  document.documentElement.setAttribute('data-theme', ui.theme);
   if(!session){ app.innerHTML = renderLogin(); attachLoginEvents(); return; }
   if(session.role==='alumno'){ app.innerHTML = renderStudentPortalPage(); attachGlobalEvents(); return; }
   app.innerHTML = renderShell();
@@ -1737,11 +1730,12 @@ function attachGlobalEvents(){
     const action = t.getAttribute('data-action');
     const id = t.getAttribute('data-id');
 
-    if(action==='nav'){ ui.view = t.getAttribute('data-view'); ui.notifOpen=false; render(); }
+    if(action==='nav'){ ui.view = t.getAttribute('data-view'); ui.notifOpen=false; ui.sidebarOpen=false; render(); }
     else if(action==='toggle-theme'){ ui.theme = ui.theme==='light'?'dark':'light'; render(); }
     else if(action==='toggle-notif'){ ui.notifOpen = !ui.notifOpen; render(); }
     else if(action==='toggle-user-menu'){ ui.userMenuOpen = !ui.userMenuOpen; render(); }
     else if(action==='toggle-sidebar'){ ui.sidebarOpen = !ui.sidebarOpen; render(); }
+    else if(action==='close-sidebar'){ ui.sidebarOpen = false; render(); }
     else if(action==='logout'){ logout(); render(); }
     else if(action==='submit-student-respuesta'){
       const rotationId = t.getAttribute('data-rotation-id'); const semana = Number(t.getAttribute('data-semana'));
