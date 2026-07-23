@@ -365,6 +365,7 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 /* la persistencia real ahora vive en el servidor (SQLite); el navegador solo guarda el token de sesión */
 
 let DB = null;
+let SP = null; // datos acotados del Portal de Alumnos (nunca comparte el estado general)
 let session = null;
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
   sort:{ students:{key:'nombre',dir:'asc'}, rotations:{key:'periodo',dir:'asc'} },
@@ -459,6 +460,9 @@ function pushActivity(){ /* el registro de actividad ahora lo genera el servidor
 /* ---------------------------- persistence: carga el estado real desde el servidor ---------------------------- */
 async function loadDB(){
   DB = await apiFetch('GET', '/api/state');
+}
+async function loadStudentPortal(){
+  SP = await apiFetch('GET', '/api/mi-portal');
 }
 async function saveDB(){ /* no-op: cada mutación ya persiste directo en el servidor vía su propio endpoint */ }
 function loadSession(){
@@ -585,6 +589,89 @@ function renderConfirmModal(){
 /* =========================================================================
    RENDER: LOGIN
    ========================================================================= */
+/* =========================================================================
+   PORTAL DE ALUMNOS (vista completamente separada, sin sidebar de admin)
+   ========================================================================= */
+function renderStudentPortalPage(){
+  if(!SP) return `<div class="login-wrap"><p style="color:var(--text-3);">Cargando…</p></div>`;
+  const c = SP.current;
+  const wk = SP.semanaActual;
+  const objetivoSemana = (SP.objetivos||[]).find(o=>o.semana===wk);
+  const misRespuestas = c ? (c.respuestasAlumno||[]).find(r=>r.semana===wk) : null;
+
+  return `
+  <div style="min-height:100vh; background:var(--bg);">
+    <div class="topbar" style="position:sticky; top:0;">
+      <div class="brand" style="padding:0;">
+        <div class="brand-mark">FAT</div>
+        <div><div class="brand-name">Portal del Alumno</div></div>
+      </div>
+      <div class="topbar-spacer"></div>
+      <span class="cell-muted" style="font-size:13px; margin-right:10px;">${esc(SP.student.nombre)} ${esc(SP.student.apellido)}</span>
+      <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
+      <button class="btn btn-sm" data-action="logout">${icon('logout','icon-sm')} Salir</button>
+    </div>
+    <div class="content" style="max-width:760px; margin:0 auto;">
+      <div class="page-head">
+        <div><h1 class="page-title">Hola, ${esc(SP.student.nombre)} 👋</h1><p class="page-sub">${esc(SP.student.curso)} "${esc(SP.student.division)}" · Legajo ${esc(SP.student.legajo)}${wk? ' · Semana '+wk+' / '+SP.totalWeeks : ''}</p></div>
+      </div>
+
+      ${c? `
+      <div class="section-card">
+        <h3>Tu sección actual: ${esc(c.sectionNombre)}</h3>
+        <div class="kv" style="margin-bottom:10px;">
+          <dt>Profesor</dt><dd>${esc(c.profesorNombre)}</dd>
+          <dt>Período</dt><dd>${fmtDate(c.startDate)} – ${fmtDate(c.endDate)}</dd>
+        </div>
+        ${c.plan? `<p style="margin-bottom:6px;"><strong>Plan de la sección:</strong> ${esc(c.plan)}</p>`:''}
+        ${c.actividades? `<p style="margin-bottom:6px;"><strong>Actividades de esta semana:</strong> ${esc(c.actividades)}</p>`:''}
+        ${objetivoSemana? `<p style="margin-bottom:6px;"><strong>Objetivo de la semana ${wk}:</strong> ${esc(objetivoSemana.texto)}</p>`:''}
+      </div>
+
+      <div class="section-card">
+        <h3>Tu seguimiento de esta semana</h3>
+        <div class="field-row">
+          <div class="field" style="display:flex; align-items:center; gap:8px;">
+            <label style="display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; margin-bottom:0; cursor:pointer;">
+              <input type="checkbox" id="sp-leido" ${misRespuestas&&misRespuestas.leido?'checked':''} style="width:16px; height:16px;"> Leí el contenido de esta semana
+            </label>
+          </div>
+          <div class="field" style="display:flex; align-items:center; gap:8px;">
+            <label style="display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; margin-bottom:0; cursor:pointer;">
+              <input type="checkbox" id="sp-actividad" ${misRespuestas&&misRespuestas.actividadRealizada?'checked':''} style="width:16px; height:16px;"> Realicé la actividad
+            </label>
+          </div>
+        </div>
+        <div class="field"><label>Observaciones o consultas para tu profesor</label><textarea class="input" id="sp-observacion" placeholder="Escribí acá cualquier duda o comentario...">${misRespuestas?esc(misRespuestas.observacion||''):''}</textarea></div>
+        <button class="btn btn-primary" data-action="submit-student-respuesta" data-rotation-id="${c.id}" data-semana="${wk}">${icon('check','icon-sm')} Guardar respuesta de esta semana</button>
+      </div>
+
+      <div class="section-card">
+        <h3>Informes de tu profesor</h3>
+        ${(c.informesSemanales||[]).length? `<ul class="mono-list">${c.informesSemanales.slice().sort((a,b)=>a.semana-b.semana).map(i=>`<li><span>Semana ${i.semana}${i.nota!=null?' · <span class="badge badge-accent">Nota '+i.nota+'</span>':''}${i.texto?': '+esc(i.texto):''}</span><span class="cell-muted">${fmtDate(i.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state">Tu profesor todavía no cargó informes esta rotación.</div>`}
+      </div>
+      ` : `<div class="empty-state"><div class="em-icon">${icon('calendar')}</div><div class="em-title">No tenés una rotación activa en este momento</div></div>`}
+
+      <div class="section-card">
+        <h3>Lineamientos generales del FAT</h3>
+        <p>${esc(SP.lineamientos)||'Sin publicar aún.'}</p>
+      </div>
+
+      <div class="section-card">
+        <h3>Tu recorrido por secciones</h3>
+        <div class="timeline">
+          ${SP.rotaciones.map(r=>{
+            const cls = r.status==='finalizada'?'done':(r.status==='en_curso'?'current':'');
+            const dot = r.status==='finalizada'? icon('check','icon-sm') : r.orden;
+            return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${esc(r.sectionNombre)}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+
 function renderLogin(err){
   return `
   <div class="login-wrap">
@@ -1083,7 +1170,8 @@ function renderRotationBlock(r){
     ${r.plan? `<p style="margin-bottom:6px;"><strong>Plan de enseñanza:</strong> ${esc(r.plan)}</p>`:''}
     ${r.actividades? `<p style="margin-bottom:6px;"><strong>Actividades:</strong> ${esc(r.actividades)}</p>`:''}
     ${r.observaciones? `<p style="margin-bottom:6px;"><strong>Observaciones:</strong> ${esc(r.observaciones)}</p>`:''}
-    ${r.informesSemanales.length? `<div style="margin-top:8px;"><strong style="font-size:12.5px;">Informes semanales</strong><ul class="mono-list">${r.informesSemanales.map(i=>`<li><span>Semana ${i.semana}: ${esc(i.texto)}</span><span class="cell-muted">${fmtDate(i.fecha)}</span></li>`).join('')}</ul></div>`:''}
+    ${r.informesSemanales.length? `<div style="margin-top:8px;"><strong style="font-size:12.5px;">Informes semanales</strong><ul class="mono-list">${r.informesSemanales.slice().sort((a,b)=>a.semana-b.semana).map(i=>`<li><span>Semana ${i.semana}${i.ausente?' · <span class="badge badge-red" style="margin-left:2px;">Ausente</span>':''}${i.nota!=null?' · <span class="badge badge-accent" style="margin-left:2px;">Nota '+i.nota+'</span>':''}${i.texto?': '+esc(i.texto):''}</span><span class="cell-muted">${fmtDate(i.fecha)}</span></li>`).join('')}</ul></div>`:''}
+    ${(r.respuestasAlumno||[]).length? `<div style="margin-top:8px;"><strong style="font-size:12.5px;">Respuestas del alumno</strong><ul class="mono-list">${r.respuestasAlumno.slice().sort((a,b)=>a.semana-b.semana).map(rp=>`<li><span>Semana ${rp.semana}: ${rp.leido?'✓ leyó':'✗ no leyó'} · ${rp.actividadRealizada?'✓ hizo la actividad':'✗ no hizo la actividad'}${rp.observacion?' · "'+esc(rp.observacion)+'"':''}</span><span class="cell-muted">${fmtDate(rp.fecha)}</span></li>`).join('')}</ul></div>`:''}
     ${r.informeFinal? `<p style="margin-top:8px;"><strong>Informe final:</strong> ${esc(r.informeFinal)}</p>`:''}
     ${r.comentarios? `<p style="margin-top:6px;"><strong>Comentarios:</strong> ${esc(r.comentarios)}</p>`:''}
     ${r.attachmentUrl? `<p style="margin-top:6px;"><strong>Adjunto:</strong> <a href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener">${esc(r.attachmentName||'Ver archivo')}</a></p>`:''}
@@ -1445,6 +1533,14 @@ function studentFormHtml(s){
       ${(DB.groups||[]).map(g=>`<option value="${g.id}" ${s.groupId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}
     </select>
   </div>
+  ${(()=>{
+    const linkedUser = s.id ? DB.users.find(u=>u.studentId===s.id) : null;
+    return `<div class="field-row">
+      <div class="field"><label>Usuario del Portal de Alumnos (opcional)</label><input class="input" id="f-al-username" value="${linkedUser?esc(linkedUser.username):''}" placeholder="ej. juli.rearte"></div>
+      <div class="field"><label>Contraseña ${linkedUser?'(dejar en blanco para no cambiarla)':'(para dar acceso)'}</label><input class="input" type="password" id="f-al-password" placeholder="${linkedUser?'••••••••':'Contraseña de acceso'}"></div>
+    </div>
+    <p class="help-text">Completá usuario y contraseña si querés que este alumno pueda entrar a su propio Portal de Alumnos.</p>`;
+  })()}
   ${!s.id? `<p class="help-text">Al crear el alumno se generarán automáticamente sus ${DB.sections.length} rotaciones (una por sección) según el orden y duración vigentes.</p>`:''}
   `;
 }
@@ -1591,6 +1687,7 @@ function render(){
   const app = document.getElementById('app');
   document.body.setAttribute('data-theme', ui.theme);
   if(!session){ app.innerHTML = renderLogin(); attachLoginEvents(); return; }
+  if(session.role==='alumno'){ app.innerHTML = renderStudentPortalPage(); attachGlobalEvents(); return; }
   app.innerHTML = renderShell();
   attachGlobalEvents();
 }
@@ -1604,7 +1701,8 @@ function attachLoginEvents(){
     if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Ingresando…'; }
     try{
       await tryLogin(u,p);
-      await loadDB();
+      if(session.role==='alumno') await loadStudentPortal();
+      else await loadDB();
       render();
     }catch(e){
       document.getElementById('app').innerHTML = renderLogin(e.message || 'Usuario o contraseña incorrectos.');
@@ -1645,6 +1743,16 @@ function attachGlobalEvents(){
     else if(action==='toggle-user-menu'){ ui.userMenuOpen = !ui.userMenuOpen; render(); }
     else if(action==='toggle-sidebar'){ ui.sidebarOpen = !ui.sidebarOpen; render(); }
     else if(action==='logout'){ logout(); render(); }
+    else if(action==='submit-student-respuesta'){
+      const rotationId = t.getAttribute('data-rotation-id'); const semana = Number(t.getAttribute('data-semana'));
+      const leido = document.getElementById('sp-leido').checked;
+      const actividadRealizada = document.getElementById('sp-actividad').checked;
+      const observacion = document.getElementById('sp-observacion').value.trim();
+      try{
+        await apiFetch('POST', '/api/mi-portal/respuesta', { rotationId, semana, leido, actividadRealizada, observacion });
+        await loadStudentPortal(); render(); toast('Respuesta guardada');
+      }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
+    }
     else if(action==='confirm-yes'){ const cb = ui.confirm && ui.confirm.onConfirm; ui.confirm=null; if(cb) await cb(); render(); }
     else if(action==='confirm-no'){ if(e.target===t){ ui.confirm=null; render(); } }
     else if(action==='open-student'){ ui.selectedStudentId=id; ui.view='student-detail'; render(); }
@@ -1833,7 +1941,7 @@ async function submitModal(action, type, id){
       const data = {
         nombre: val('f-nombre'), apellido: val('f-apellido'), dni: val('f-dni'), legajo: val('f-legajo'),
         curso: val('f-curso'), division: val('f-division'), fechaInicio: val('f-fecha'), estado: val('f-estado'),
-        groupId: val('f-grupo')||null
+        groupId: val('f-grupo')||null, username: val('f-al-username')||undefined, password: val('f-al-password')||undefined
       };
       if(!data.nombre || !data.apellido || !data.dni){ toast('Completá nombre, apellido y DNI','red'); return; }
       if(id){
@@ -2000,8 +2108,8 @@ async function init(){
   loadSession();
   if(session && authToken){
     try{
-      await loadDB();
-      if(session.role==='seccion') ui.view = 'teacherHome';
+      if(session.role==='alumno'){ await loadStudentPortal(); }
+      else{ await loadDB(); if(session.role==='seccion') ui.view = 'teacherHome'; }
     }catch(e){
       console.error('No se pudo restaurar la sesión', e);
       authToken=null; session=null;
