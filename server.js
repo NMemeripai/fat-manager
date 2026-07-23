@@ -70,7 +70,7 @@ app.post('/api/auth/login', h(async (req, res) => {
   if (!u || !bcrypt.compareSync(password, u.passwordHash)) {
     return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
   }
-  const payload = { sub: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId || null, sectionId: u.sectionId || null };
+  const payload = { sub: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId || null, sectionId: u.sectionId || null, studentId: u.studentId || null };
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '12h' });
   res.json({ token, user: payload });
 }));
@@ -93,6 +93,7 @@ app.post('/api/upload', auth, upload.single('file'), h(async (req, res) => {
 
 /* ---------------------------- full state snapshot ---------------------------- */
 app.get('/api/state', auth, h(async (req, res) => {
+  if (req.user.role === 'alumno') return res.status(403).json({ error: 'Los alumnos no tienen acceso a este recurso' });
   const cfgSnap = await db.collection('config').doc('main').get();
   const config = cfgSnap.data();
   const teachers = await allDocs('teachers');
@@ -104,22 +105,32 @@ app.get('/api/state', auth, h(async (req, res) => {
   const groups = await allDocs('groups');
   const pendientes = await allDocs('pendientes');
   const activityLog = await getActivityLog(40);
-  const users = (await allDocs('users')).map(u => ({ id: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId, sectionId: u.sectionId }));
+  const users = (await allDocs('users')).map(u => ({ id: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId, sectionId: u.sectionId, studentId: u.studentId || null }));
   res.json({ config, teachers, sections, students, rotations, consignas, objetivos, groups, pendientes, activityLog, users });
 }));
 
 /* ---------------------------- students ---------------------------- */
 app.post('/api/students', auth, requireRole('admin'), h(async (req, res) => {
-  const { nombre, apellido, dni, curso, division, legajo, fechaInicio, estado, groupId } = req.body || {};
+  const { nombre, apellido, dni, curso, division, legajo, fechaInicio, estado, groupId, username, password } = req.body || {};
   if (!nombre || !apellido || !dni || !legajo) return res.status(400).json({ error: 'Faltan campos obligatorios' });
   const dupe = await whereEquals('students', 'legajo', legajo);
   if (dupe.length) return res.status(409).json({ error: 'Ya existe un alumno con ese legajo' });
   const sections = await getSectionsOrdered();
   if (!sections.length) return res.status(400).json({ error: 'No hay secciones creadas todavía. Creá al menos una sección antes de dar de alta alumnos.' });
+  if (username) {
+    const dupeUser = await whereEquals('users', 'username', username);
+    if (dupeUser.length) return res.status(409).json({ error: 'Ese usuario ya existe' });
+  }
   const id = uid('al');
   const data = { nombre, apellido, dni, curso, division, legajo, fechaInicio: fechaInicio || todayISO(), estado: estado || 'activo', groupId: groupId || null };
   await db.collection('students').doc(id).set(data);
   await generateRotationsFor({ id, fechaInicio: data.fechaInicio });
+  if (username && password) {
+    await db.collection('users').doc(uid('u')).set({
+      username, passwordHash: bcrypt.hashSync(password, 10), role: 'alumno', nombre: nombre + ' ' + apellido,
+      teacherId: null, sectionId: null, studentId: id
+    });
+  }
   await logActivity(`Se creó el alumno ${nombre} ${apellido} con sus ${sections.length} rotaciones.`);
   res.status(201).json({ id });
 }));
@@ -127,8 +138,24 @@ app.post('/api/students', auth, requireRole('admin'), h(async (req, res) => {
 app.put('/api/students/:id', auth, requireRole('admin'), h(async (req, res) => {
   const exists = await docData('students', req.params.id);
   if (!exists) return res.status(404).json({ error: 'Alumno no encontrado' });
-  const { nombre, apellido, dni, curso, division, legajo, fechaInicio, estado, groupId } = req.body || {};
+  const { nombre, apellido, dni, curso, division, legajo, fechaInicio, estado, groupId, username, password } = req.body || {};
   await db.collection('students').doc(req.params.id).update({ nombre, apellido, dni, curso, division, legajo, fechaInicio, estado, groupId: groupId || null });
+  if (username) {
+    const linked = await whereEquals('users', 'studentId', req.params.id);
+    const existingUser = linked[0];
+    if (existingUser) {
+      const update = { username, nombre: nombre + ' ' + apellido };
+      if (password) update.passwordHash = bcrypt.hashSync(password, 10);
+      await db.collection('users').doc(existingUser.id).update(update);
+    } else if (password) {
+      const dupeUser = await whereEquals('users', 'username', username);
+      if (dupeUser.length) return res.status(409).json({ error: 'Ese usuario ya existe' });
+      await db.collection('users').doc(uid('u')).set({
+        username, passwordHash: bcrypt.hashSync(password, 10), role: 'alumno', nombre: nombre + ' ' + apellido,
+        teacherId: null, sectionId: null, studentId: req.params.id
+      });
+    }
+  }
   await logActivity(`Se actualizaron los datos de ${nombre} ${apellido}.`);
   res.json({ ok: true });
 }));
@@ -137,8 +164,10 @@ app.delete('/api/students/:id', auth, requireRole('admin'), h(async (req, res) =
   const st = await docData('students', req.params.id);
   if (!st) return res.status(404).json({ error: 'Alumno no encontrado' });
   const rots = await whereEquals('rotations', 'studentId', req.params.id);
+  const linkedUsers = await whereEquals('users', 'studentId', req.params.id);
   const batch = db.batch();
   rots.forEach(r => batch.delete(db.collection('rotations').doc(r.id)));
+  linkedUsers.forEach(u => batch.delete(db.collection('users').doc(u.id)));
   batch.delete(db.collection('students').doc(req.params.id));
   await batch.commit();
   await logActivity(`Se eliminó al alumno ${st.nombre} ${st.apellido}.`);
@@ -434,12 +463,85 @@ app.delete('/api/objetivos/:id', auth, requireRole('admin', 'coordinador'), h(as
   res.json({ ok: true });
 }));
 
+/* ---------------------------- portal del alumno (datos acotados a sí mismo) ---------------------------- */
+app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
+  const studentId = req.user.studentId;
+  if (!studentId) return res.status(400).json({ error: 'Esta cuenta no está vinculada a ningún alumno' });
+  const student = await docData('students', studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+
+  const rotationsRaw = await whereEquals('rotations', 'studentId', studentId);
+  const rotations = rotationsRaw.slice().sort((a, b) => a.orden - b.orden);
+  const current = rotations.find(r => r.status === 'en_curso') || rotations.find(r => r.status !== 'finalizada') || rotations[rotations.length - 1];
+
+  const cfgSnap = await db.collection('config').doc('main').get();
+  const config = cfgSnap.data();
+  const consignas = await allDocs('consignas');
+  const objetivos = await allDocs('objetivos');
+
+  const rotationsSummary = await Promise.all(rotations.map(async r => {
+    const section = await docData('sections', r.sectionId);
+    return {
+      id: r.id, orden: r.orden, sectionNombre: section ? section.nombre : '—',
+      startDate: r.startDate, endDate: r.endDate, status: r.status
+    };
+  }));
+
+  let currentDetail = null;
+  if (current) {
+    const section = await docData('sections', current.sectionId);
+    const teacher = current.teacherId ? await docData('teachers', current.teacherId) : null;
+    currentDetail = {
+      id: current.id, sectionNombre: section ? section.nombre : '—', profesorNombre: teacher ? teacher.nombre : '—',
+      startDate: current.startDate, endDate: current.endDate, status: current.status,
+      plan: current.plan || '', actividades: current.actividades || '', observaciones: current.observaciones || '',
+      informesSemanales: current.informesSemanales || [], respuestasAlumno: current.respuestasAlumno || []
+    };
+  }
+
+  res.json({
+    student: { nombre: student.nombre, apellido: student.apellido, curso: student.curso, division: student.division, legajo: student.legajo, estado: student.estado },
+    totalWeeks: config.totalWeeks, semanaActual: student.estado === 'activo' ? currentWeekOf(student, config) : null,
+    lineamientos: config.lineamientos, consignas, objetivos,
+    current: currentDetail, rotaciones: rotationsSummary
+  });
+}));
+
+function currentWeekOf(student, config) {
+  const d = Math.round((new Date(todayISO() + 'T00:00:00') - new Date(student.fechaInicio + 'T00:00:00')) / 86400000);
+  const wk = Math.floor(d / 7) + 1;
+  return Math.max(1, Math.min(wk, config.totalWeeks));
+}
+
+app.post('/api/mi-portal/respuesta', auth, requireRole('alumno'), h(async (req, res) => {
+  const studentId = req.user.studentId;
+  if (!studentId) return res.status(400).json({ error: 'Esta cuenta no está vinculada a ningún alumno' });
+  const { rotationId, semana, leido, actividadRealizada, observacion } = req.body || {};
+  const r = await docData('rotations', rotationId);
+  if (!r || r.studentId !== studentId) return res.status(403).json({ error: 'No podés responder sobre una rotación que no es tuya' });
+  const nuevo = { semana, leido: !!leido, actividadRealizada: !!actividadRealizada, observacion: observacion || '', fecha: todayISO() };
+  const existingList = r.respuestasAlumno || [];
+  const existingIdx = existingList.findIndex(e => e.semana === semana);
+  const respuestasAlumno = existingIdx >= 0
+    ? existingList.map((e, i) => i === existingIdx ? nuevo : e)
+    : [...existingList, nuevo];
+  await db.collection('rotations').doc(rotationId).update({ respuestasAlumno });
+  const student = await docData('students', studentId);
+  await logActivity(`${student.nombre} ${student.apellido} respondió el seguimiento de la semana ${semana}.`);
+  res.status(201).json({ ok: true });
+}));
+
 app.get('/health', h(async (req, res) => {
   await db.collection('config').doc('main').get();
   res.json({ ok: true, db: 'firestore', cloudinary: CLOUDINARY_READY, time: new Date().toISOString() });
 }));
 
 ensureSeed()
+  .then(() => app.listen(PORT, () => console.log(`[server] FAT Manager API real corriendo en http://localhost:${PORT}`)))
+  .catch(err => { console.error('[server] No se pudo inicializar Firestore:', err.message); process.exit(1); });
+
+module.exports = app;
+
   .then(() => app.listen(PORT, () => console.log(`[server] FAT Manager API real corriendo en http://localhost:${PORT}`)))
   .catch(err => { console.error('[server] No se pudo inicializar Firestore:', err.message); process.exit(1); });
 
