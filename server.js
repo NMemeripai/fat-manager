@@ -465,6 +465,38 @@ app.put('/api/rotations/:id', auth, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ---------------------------- Cronograma de Rotaciones (admin): ediciones acotadas, sin tocar el resto ---------------------------- */
+app.put('/api/rotations/:id/schedule', auth, requireRole('admin'), h(async (req, res) => {
+  const r = await docData('rotations', req.params.id);
+  if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
+  const { sectionId, teacherId, startDate, endDate } = req.body || {};
+  const update = {};
+  if (sectionId !== undefined) {
+    const newSection = await docData('sections', sectionId);
+    if (!newSection) return res.status(400).json({ error: 'La sección elegida no existe' });
+    update.sectionId = sectionId;
+    update.teacherId = teacherId !== undefined ? teacherId : (newSection.teacherId || null);
+  } else if (teacherId !== undefined) {
+    update.teacherId = teacherId;
+  }
+  if (startDate !== undefined) update.startDate = startDate;
+  if (endDate !== undefined) update.endDate = endDate;
+  if (startDate && endDate && startDate > endDate) return res.status(400).json({ error: 'La fecha de inicio no puede ser posterior a la de fin' });
+  if (!Object.keys(update).length) return res.status(400).json({ error: 'No se envió ningún cambio' });
+  await db.collection('rotations').doc(req.params.id).update(update);
+  const student = await docData('students', r.studentId);
+  await logActivity(`Se ajustó el cronograma de la rotación de ${student.nombre} ${student.apellido}.`);
+  res.json({ ok: true });
+}));
+
+app.put('/api/students/:id/group', auth, requireRole('admin'), h(async (req, res) => {
+  const st = await docData('students', req.params.id);
+  if (!st) return res.status(404).json({ error: 'Alumno no encontrado' });
+  const { groupId } = req.body || {};
+  await db.collection('students').doc(req.params.id).update({ groupId: groupId || null });
+  res.json({ ok: true });
+}));
+
 app.post('/api/rotations/:id/weekly-report', auth, h(async (req, res) => {
   const r = await docData('rotations', req.params.id);
   if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
