@@ -518,6 +518,27 @@ async function loadPlanillaDetalle(id){
 }
 function getPlanilla(id){ return (PLANILLAS||[]).find(p=>p.id===id); }
 let planillaSaveTimer = null;
+async function downloadAuthFile(url, fallbackName){
+  try{
+    const res = await fetch(API_BASE+url, { headers: { Authorization: 'Bearer '+authToken } });
+    if(!res.ok){
+      let msg = 'No se pudo descargar el archivo';
+      try{ msg = (await res.json()).error || msg; }catch(e){}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    let filename = fallbackName || 'archivo';
+    const cd = res.headers.get('Content-Disposition');
+    if(cd){ const m = cd.match(/filename="([^"]+)"/); if(m) filename = m[1]; }
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(blobUrl), 4000);
+  }catch(e){
+    toast(e.message||'No se pudo descargar el archivo', 'red');
+  }
+}
 async function exportPlanillaDocx(id){
   try{
     toast('Generando el documento Word…');
@@ -752,7 +773,7 @@ function renderStudentPortalPage(){
       <div class="section-card">
         <h3>Mis documentos <button class="btn btn-sm" data-action="new-documento" style="margin-left:auto;">${icon('upload','icon-sm')} Subir documento</button></h3>
         ${MY_DOCS===null? `<p class="cell-muted" style="font-size:12.5px;">Cargando…</p>` :
-          (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="${esc(d.url)}" target="_blank" rel="noopener" download="${esc(d.nombre)}">${esc(d.nombre)}</a>${d.observaciones?' · '+esc(d.observaciones):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
+          (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="#" data-action="download-documento" data-id="${d.id}" data-name="${esc(d.nombre)}">${esc(d.nombre)}</a>${d.observaciones?' · '+esc(d.observaciones):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
       </div>
 
       <div class="section-card">
@@ -978,7 +999,7 @@ function renderTeacherHome(){
   <div class="section-card">
     <h3>Mis documentos MEP ${icon('file','icon-sm')} <span style="margin-left:auto; display:flex; gap:6px;"><button class="btn btn-sm" data-action="new-planilla">${icon('edit','icon-sm')} Completar Planilla FAT</button><button class="btn btn-sm" data-action="new-documento">${icon('upload','icon-sm')} Subir documento</button></span></h3>
     ${MY_DOCS===null? `<p class="cell-muted" style="font-size:12.5px;">${icon('clock','icon-sm')} Cargando…</p>` :
-      (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.slice(0,8).map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="${esc(d.url)}" target="_blank" rel="noopener" download="${esc(d.nombre)}">${esc(d.nombre)}</a>${d.studentId?' · '+esc(studentName(d.studentId)):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
+      (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.slice(0,8).map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="#" data-action="download-documento" data-id="${d.id}" data-name="${esc(d.nombre)}">${esc(d.nombre)}</a>${d.studentId?' · '+esc(studentName(d.studentId)):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
   </div>
   `;
 }
@@ -1273,7 +1294,7 @@ function renderRotationBlock(r){
     ${(r.respuestasAlumno||[]).length? `<div style="margin-top:8px;"><strong style="font-size:12.5px;">Respuestas del alumno</strong><ul class="mono-list">${r.respuestasAlumno.slice().sort((a,b)=>a.semana-b.semana).map(rp=>`<li><span>Semana ${rp.semana}: ${rp.leido?'✓ leyó':'✗ no leyó'} · ${rp.actividadRealizada?'✓ hizo la actividad':'✗ no hizo la actividad'}${rp.observacion?' · "'+esc(rp.observacion)+'"':''}</span><span class="cell-muted">${fmtDate(rp.fecha)}</span></li>`).join('')}</ul></div>`:''}
     ${r.informeFinal? `<p style="margin-top:8px;"><strong>Informe final:</strong> ${esc(r.informeFinal)}</p>`:''}
     ${r.comentarios? `<p style="margin-top:6px;"><strong>Comentarios:</strong> ${esc(r.comentarios)}</p>`:''}
-    ${r.attachmentUrl? `<p style="margin-top:6px;"><strong>Adjunto:</strong> <a href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener" download="${esc(r.attachmentName||'adjunto')}">${esc(r.attachmentName||'Ver archivo')}</a></p>`:''}
+    ${r.attachmentUrl? `<p style="margin-top:6px;"><strong>Adjunto:</strong> <a href="#" data-action="download-rotation-attachment" data-id="${r.id}" data-name="${esc(r.attachmentName||'adjunto')}">${esc(r.attachmentName||'Ver archivo')}</a></p>`:''}
   </div>`;
 }
 
@@ -1738,7 +1759,7 @@ function renderDocumentos(){
         <td class="cell-muted">${esc(d.hora||'—')}</td>
         <td class="cell-muted">${esc(d.observaciones||'—')}</td>
         <td style="white-space:nowrap;">
-          <a class="btn btn-sm" href="${esc(d.url)}" target="_blank" rel="noopener" download="${esc(d.nombre)}">${icon('download','icon-sm')} Ver/Descargar</a>
+          <button class="btn btn-sm" data-action="download-documento" data-id="${d.id}" data-name="${esc(d.nombre)}">${icon('download','icon-sm')} Ver/Descargar</button>
           <button class="btn btn-sm btn-danger" data-action="delete-documento" data-id="${d.id}">${icon('trash','icon-sm')}</button>
         </td>
       </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin documentos ${ui.docTab==='mep'?'de profesores':'de alumnos'}</div></div></td></tr>`}
@@ -2032,7 +2053,7 @@ function rotationFormHtml(r){
       <input type="file" id="f-r-file" style="display:none;">
       <input type="hidden" id="f-r-file-name" value="${esc(r.attachmentName||'')}">
       <input type="hidden" id="f-r-file-url" value="${esc(r.attachmentUrl||'')}">
-      <div id="f-r-file-chip">${r.attachmentUrl? `<a class="file-chip" href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener" download="${esc(r.attachmentName||'adjunto')}" style="text-decoration:none;">${icon('paperclip','icon-sm')} ${esc(r.attachmentName||'Ver archivo')}</a>` : (r.attachmentName? `<div class="file-chip">${icon('paperclip','icon-sm')} ${esc(r.attachmentName)}</div>` : '')}</div>
+      <div id="f-r-file-chip">${r.attachmentUrl? `<a href="#" class="file-chip" data-action="download-rotation-attachment" data-id="${r.id}" data-name="${esc(r.attachmentName||'adjunto')}" style="text-decoration:none;">${icon('paperclip','icon-sm')} ${esc(r.attachmentName||'Ver archivo')}</a>` : (r.attachmentName? `<div class="file-chip">${icon('paperclip','icon-sm')} ${esc(r.attachmentName)}</div>` : '')}</div>
       <p class="help-text">El archivo se sube a Cloudinary y queda con un enlace real para descargar o ver.</p>
     </div>
   </div>
@@ -2302,6 +2323,8 @@ function attachGlobalEvents(){
       autosavePlanilla({ asistencia: p.asistencia });
     }
     else if(action==='doc-tab'){ ui.docTab = t.getAttribute('data-tab'); render(); }
+    else if(action==='download-documento'){ await downloadAuthFile('/api/documentos/'+id+'/download', t.getAttribute('data-name')); }
+    else if(action==='download-rotation-attachment'){ await downloadAuthFile('/api/rotations/'+id+'/attachment', t.getAttribute('data-name')); }
     else if(action==='delete-documento'){
       const docToDel = (DOCS||[]).find(d=>d.id===id);
       askConfirm({
