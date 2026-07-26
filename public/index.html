@@ -353,6 +353,15 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
   #planilla-print-area{position:absolute; left:0; top:0; width:100%; box-shadow:none; border:none; max-width:none;}
   .no-print, .sidebar, .topbar, .sidebar-scrim{display:none !important;}
 }
+.cron-legend-item{display:flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:var(--r-pill); border:1px solid var(--border); background:var(--surface); cursor:default; transition:box-shadow .15s var(--ease);}
+.cron-legend-item.cron-drag-over{box-shadow:0 0 0 2px var(--accent); background:var(--accent-softer);}
+.cron-legend-swatch{width:12px; height:12px; border-radius:4px; flex-shrink:0;}
+.cron-table{border-collapse:collapse; font-size:12px;}
+.cron-table th{padding:6px 4px; text-align:center; font-size:10.5px; color:var(--text-3); border-bottom:1px solid var(--border); white-space:nowrap; min-width:44px;}
+.cron-sticky-col{position:sticky; left:0; background:var(--surface); z-index:2; text-align:left !important; padding:8px 12px !important; min-width:160px; border-right:1px solid var(--border);}
+.cron-cell{width:44px; height:34px; padding:3px !important; border-bottom:1px solid var(--border); text-align:center; cursor:pointer;}
+.cron-cell-empty{cursor:default;}
+.cron-cell-bar{height:100%; border-radius:5px; min-height:22px;}
 </style>
 </head>
 <body>
@@ -390,7 +399,8 @@ let session = null;
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
   sort:{ students:{key:'nombre',dir:'asc'}, rotations:{key:'periodo',dir:'asc'} },
   page:{ students:1, rotations:1 },
-  sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', plnFilters:{} };
+  sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', plnFilters:{},
+  cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'' };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -850,6 +860,7 @@ function renderShell(){
         ${navItem('guidelines','book','Lineamientos')}
         ${navItem('reports','file','Informes')}
         <div class="nav-section-label">Sistema</div>
+        ${navItem('cronograma','calendar','Cronograma de Rotaciones', ['admin','coordinador'])}
         ${navItem('planillas','file','Planillas Digitales FAT', ['admin','seccion'])}
         ${navItem('documentos','file','Centro de Documentos', ['admin'])}
         ${navItem('config','sliders','Configuración', ['admin'])}
@@ -919,6 +930,7 @@ function renderView(){
     case 'pendientes': return renderPendientes();
     case 'guidelines': return renderGuidelines();
     case 'reports': return renderReports();
+    case 'cronograma': return (session.role==='admin'||session.role==='coordinador') ? renderCronograma() : renderDashboard();
     case 'planillas': return (session.role==='admin'||session.role==='seccion') ? renderPlanillas() : renderDashboard();
     case 'planilla-detalle': return renderPlanillaDetalle();
     case 'documentos': return session.role==='admin' ? renderDocumentos() : renderDashboard();
@@ -1544,6 +1556,110 @@ function asistenciaBadge(estado){
   return `<span class="badge badge-${e.c}">${e.l}</span>`;
 }
 
+/* ---------------------------- CRONOGRAMA DE ROTACIONES (grilla interactiva tipo Excel) ---------------------------- */
+const SECTION_PALETTE = ['#2563EB','#16A34A','#D97706','#DB2777','#7C3AED','#0891B2','#DC2626','#4D7C0F','#0D9488','#9333EA'];
+function sectionColor(sectionId){
+  const sorted = DB.sections.slice().sort((a,b)=>a.orden-b.orden);
+  const idx = sorted.findIndex(s=>s.id===sectionId);
+  return SECTION_PALETTE[idx>=0? idx % SECTION_PALETTE.length : 0];
+}
+function mondayOf(iso){ const d=new Date(iso+'T00:00:00'); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day); return d.toISOString().slice(0,10); }
+
+function renderCronograma(){
+  const f = ui.plnFilters; // reutilizamos el mismo objeto de filtros que Planillas, con claves propias
+  let students = DB.students.filter(s=>s.estado==='activo'||s.estado==='pausado');
+  if(ui.cronFiltroGrupo) students = students.filter(s=>s.groupId===ui.cronFiltroGrupo);
+  if(ui.cronFiltroCurso) students = students.filter(s=>s.curso===ui.cronFiltroCurso);
+  if(ui.cronFiltroSeccion) students = students.filter(s=> rotationsOf(s.id).some(r=>r.sectionId===ui.cronFiltroSeccion));
+
+  const allRots = students.flatMap(s=>rotationsOf(s.id));
+  if(!allRots.length){
+    return `<div class="page-head"><div><h1 class="page-title">Cronograma de Rotaciones</h1></div></div><div class="empty-state"><div class="em-icon">${icon('calendar')}</div><div class="em-title">No hay rotaciones para mostrar con estos filtros</div></div>`;
+  }
+  const minDate = allRots.reduce((m,r)=> r.startDate<m? r.startDate:m, allRots[0].startDate);
+  const maxDate = allRots.reduce((m,r)=> r.endDate>m? r.endDate:m, allRots[0].endDate);
+  const weeks = [];
+  let cursor = mondayOf(minDate);
+  while(cursor <= maxDate){ weeks.push(cursor); cursor = addDays(cursor,7); }
+
+  const cursos = [...new Set(DB.students.map(s=>s.curso))];
+  const isAdmin = session.role==='admin';
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Cronograma de Rotaciones</h1><p class="page-sub">${students.length} alumno${students.length===1?'':'s'} · ${weeks.length} semanas en pantalla</p></div>
+  </div>
+  <div class="filters-row">
+    <select class="select" data-action="cron-filtro-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${ui.cronFiltroGrupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
+    <select class="select" data-action="cron-filtro-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${ui.cronFiltroSeccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+    <select class="select" data-action="cron-filtro-curso"><option value="">Todos los cursos</option>${cursos.map(c=>`<option value="${esc(c)}" ${ui.cronFiltroCurso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
+  </div>
+  <div style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:14px;">
+    ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`
+      <div class="cron-legend-item" data-action="cron-drop-target" data-section-id="${s.id}" title="${isAdmin?'Soltá acá una rotación para reasignarla a esta sección':''}">
+        <span class="cron-legend-swatch" style="background:${sectionColor(s.id)};"></span>${esc(s.nombre)}
+      </div>`).join('')}
+  </div>
+  <div class="table-wrap" style="overflow-x:auto;">
+    <table class="cron-table">
+      <thead><tr>
+        <th class="cron-sticky-col">Alumno</th>
+        ${weeks.map((w,i)=>`<th>S${i+1}<br><span class="cell-muted" style="font-weight:500; font-size:10px;">${fmtDate(w).slice(0,5)}</span></th>`).join('')}
+      </tr></thead>
+      <tbody>
+      ${students.map(s=>{
+        const rots = rotationsOf(s.id);
+        return `<tr>
+          <td class="cron-sticky-col cell-strong">${esc(s.nombre)} ${esc(s.apellido)}</td>
+          ${weeks.map(w=>{
+            const wEnd = addDays(w,6);
+            const rot = rots.find(r=> r.startDate<=wEnd && r.endDate>=w);
+            if(!rot) return `<td class="cron-cell cron-cell-empty"></td>`;
+            const color = sectionColor(rot.sectionId);
+            return `<td class="cron-cell" style="background:${color}22;" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="${esc(sectionName(rot.sectionId))} · ${esc(teacherName(rot.teacherId))}">
+              <div class="cron-cell-bar" style="background:${color};"></div>
+            </td>`;
+          }).join('')}
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+  </div>
+  <p class="help-text" style="margin-top:10px;">${isAdmin? 'Hacé clic en cualquier celda para editar sección, tutor o fechas. También podés arrastrar una celda y soltarla sobre el nombre de una sección en la leyenda para reasignarla.' : 'Vista de solo lectura.'}</p>
+  `;
+}
+
+function cronogramaEditFormHtml(rot){
+  const student = DB.students.find(s=>s.id===rot.studentId);
+  return `
+  <div class="kv" style="margin-bottom:14px;"><dt>Alumno</dt><dd>${esc(student?student.nombre+' '+student.apellido:'—')}</dd></div>
+  <div class="field-row">
+    <div class="field"><label>Sección</label>
+      <select class="select" id="f-cron-seccion" style="width:100%;">
+        ${DB.sections.map(s=>`<option value="${s.id}" ${rot.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Tutor / Profesor</label>
+      <select class="select" id="f-cron-tutor" style="width:100%;">
+        <option value="">Sin asignar</option>
+        ${DB.teachers.filter(t=>t.rol==='seccion').map(t=>`<option value="${t.id}" ${rot.teacherId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>Fecha de inicio</label><input class="input" type="date" id="f-cron-inicio" value="${rot.startDate}"></div>
+    <div class="field"><label>Fecha de fin</label><input class="input" type="date" id="f-cron-fin" value="${rot.endDate}"></div>
+  </div>
+  <div class="field"><label>Grupo del alumno</label>
+    <select class="select" id="f-cron-grupo" style="width:100%;">
+      <option value="">Sin grupo</option>
+      ${(DB.groups||[]).map(g=>`<option value="${g.id}" ${DB.students.find(s=>s.id===rot.studentId).groupId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}
+    </select>
+  </div>
+  <p class="help-text">Cambiar la sección reasigna automáticamente el tutor al profesor de esa sección, salvo que elijas uno distinto acá.</p>
+  `;
+}
+
 function renderPlanillas(){
   if(!PLANILLAS) return `<div class="page-head"><div><h1 class="page-title">Planillas Digitales FAT</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
   const isAdmin = session.role==='admin';
@@ -1897,6 +2013,7 @@ function renderModal(){
   else if(m.type==='documento-form'){ title='Subir documento'; body = documentoFormHtml(); }
   else if(m.type==='planilla-form'){ title='Nueva Planilla Digital FAT'; body = planillaFormHtml(); }
   else if(m.type==='criterio-form'){ title = m.data? 'Editar criterio':'Nuevo criterio'; body = `<div class="field"><label>Nombre del criterio</label><input class="input" id="f-criterio-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Puntualidad"></div>`; }
+  else if(m.type==='cronograma-edit-form'){ title='Editar rotación en el cronograma'; body = cronogramaEditFormHtml(m.data); }
 
   return `
   <div class="modal-overlay" data-action="close-modal-bg">
@@ -2143,6 +2260,31 @@ function attachGlobalEvents(){
   if(globalEventsAttached) return; // el #app persiste entre renders (solo cambia su innerHTML);
   globalEventsAttached = true;      // sin este guard, cada render() apilaría un listener más.
 
+  app.addEventListener('dragstart', (e)=>{
+    const t = e.target.closest('[data-drag-rotation]');
+    if(t) e.dataTransfer.setData('text/rotation-id', t.getAttribute('data-drag-rotation'));
+  });
+  app.addEventListener('dragover', (e)=>{
+    const t = e.target.closest('[data-action="cron-drop-target"]');
+    if(t){ e.preventDefault(); t.classList.add('cron-drag-over'); }
+  });
+  app.addEventListener('dragleave', (e)=>{
+    const t = e.target.closest('[data-action="cron-drop-target"]');
+    if(t) t.classList.remove('cron-drag-over');
+  });
+  app.addEventListener('drop', async (e)=>{
+    const t = e.target.closest('[data-action="cron-drop-target"]');
+    if(!t) return;
+    e.preventDefault(); t.classList.remove('cron-drag-over');
+    const rotId = e.dataTransfer.getData('text/rotation-id');
+    const newSectionId = t.getAttribute('data-section-id');
+    if(!rotId || !newSectionId) return;
+    try{
+      await apiFetch('PUT', '/api/rotations/'+rotId+'/schedule', { sectionId: newSectionId });
+      await loadDB(); render(); toast('Rotación reasignada de sección');
+    }catch(e2){ toast(e2.message||'No se pudo reasignar', 'red'); }
+  });
+
   app.addEventListener('input', (e)=>{
     const t = e.target;
     if(t.classList && t.classList.contains('pln-autosave')){
@@ -2248,6 +2390,7 @@ function attachGlobalEvents(){
       });
     }
     else if(action==='new-criterio'){ ui.modal={type:'criterio-form', data:null}; render(); }
+    else if(action==='cron-edit'){ ui.modal={type:'cronograma-edit-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
     else if(action==='edit-criterio'){ ui.modal={type:'criterio-form', data:(CRITERIOS||[]).find(c=>c.id===id)}; render(); }
     else if(action==='delete-criterio'){
       const cForDel = (CRITERIOS||[]).find(c=>c.id===id);
@@ -2393,6 +2536,9 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="filter-pln-profesor"]')){ ui.plnFilters.teacherId = t.value; await loadPlanillas(); render(); }
     else if(t.matches('[data-action="filter-pln-desde"]')){ ui.plnFilters.desde = t.value; await loadPlanillas(); render(); }
     else if(t.matches('[data-action="filter-pln-hasta"]')){ ui.plnFilters.hasta = t.value; await loadPlanillas(); render(); }
+    else if(t.matches('[data-action="cron-filtro-grupo"]')){ ui.cronFiltroGrupo = t.value; render(); }
+    else if(t.matches('[data-action="cron-filtro-seccion"]')){ ui.cronFiltroSeccion = t.value; render(); }
+    else if(t.matches('[data-action="cron-filtro-curso"]')){ ui.cronFiltroCurso = t.value; render(); }
     else if(t.classList && t.classList.contains('pln-desempeno')){
       const critId = t.getAttribute('data-criterio'); const val = t.value;
       const p = getPlanilla(currentPlanillaId);
@@ -2595,6 +2741,16 @@ async function submitModal(action, type, id){
       if(id) await apiFetch('PUT', '/api/criterios-desempeno/'+id, { nombre });
       else await apiFetch('POST', '/api/criterios-desempeno', { nombre });
       await loadCriterios(); ui.modal=null; render(); toast(id? 'Criterio actualizado':'Criterio creado');
+    }
+    else if(type==='cronograma-edit-form'){
+      const rot = DB.rotations.find(r=>r.id===id);
+      const sectionId = val('f-cron-seccion'); const teacherId = val('f-cron-tutor')||null;
+      const startDate = val('f-cron-inicio'); const endDate = val('f-cron-fin');
+      const groupId = val('f-cron-grupo')||null;
+      if(startDate>endDate){ toast('La fecha de inicio no puede ser posterior a la de fin','red'); return; }
+      await apiFetch('PUT', '/api/rotations/'+id+'/schedule', { sectionId, teacherId, startDate, endDate });
+      await apiFetch('PUT', '/api/students/'+rot.studentId+'/group', { groupId });
+      await loadDB(); ui.modal=null; render(); toast('Cronograma actualizado');
     }
     else if(type==='quick-week-form'){
       const r = DB.rotations.find(x=>x.id===id);
