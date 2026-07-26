@@ -1574,28 +1574,27 @@ function sectionColor(sectionId){
 function mondayOf(iso){ const d=new Date(iso+'T00:00:00'); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day); return d.toISOString().slice(0,10); }
 
 function renderCronograma(){
-  const f = ui.plnFilters; // reutilizamos el mismo objeto de filtros que Planillas, con claves propias
   let students = DB.students.filter(s=>s.estado==='activo'||s.estado==='pausado');
   if(ui.cronFiltroGrupo) students = students.filter(s=>s.groupId===ui.cronFiltroGrupo);
   if(ui.cronFiltroCurso) students = students.filter(s=>s.curso===ui.cronFiltroCurso);
   if(ui.cronFiltroSeccion) students = students.filter(s=> rotationsOf(s.id).some(r=>r.sectionId===ui.cronFiltroSeccion));
 
-  const allRots = students.flatMap(s=>rotationsOf(s.id));
-  if(!allRots.length){
-    return `<div class="page-head"><div><h1 class="page-title">Cronograma de Rotaciones</h1></div></div><div class="empty-state"><div class="em-icon">${icon('calendar')}</div><div class="em-title">No hay rotaciones para mostrar con estos filtros</div></div>`;
+  if(!students.length){
+    return `<div class="page-head"><div><h1 class="page-title">Cronograma de Rotaciones</h1></div></div><div class="empty-state"><div class="em-icon">${icon('calendar')}</div><div class="em-title">No hay alumnos para mostrar con estos filtros</div></div>`;
   }
-  const minDate = allRots.reduce((m,r)=> r.startDate<m? r.startDate:m, allRots[0].startDate);
-  const maxDate = allRots.reduce((m,r)=> r.endDate>m? r.endDate:m, allRots[0].endDate);
-  const weeks = [];
-  let cursor = mondayOf(minDate);
-  while(cursor <= maxDate){ weeks.push(cursor); cursor = addDays(cursor,7); }
+
+  // Las semanas del cronograma salen de la duración total configurada del programa
+  // (suma de la duración de cada sección), NO de un rango de fechas calculado —
+  // así siempre se muestran todas las semanas, sean cuales sean las fechas de inicio de cada alumno.
+  const numWeeks = DB.config.totalWeeks || 20;
+  const weekNumbers = Array.from({length: numWeeks}, (_,i)=>i+1);
 
   const cursos = [...new Set(DB.students.map(s=>s.curso))];
   const isAdmin = session.role==='admin';
 
   return `
   <div class="page-head">
-    <div><h1 class="page-title">Cronograma de Rotaciones</h1><p class="page-sub">${students.length} alumno${students.length===1?'':'s'} · ${weeks.length} semanas en pantalla</p></div>
+    <div><h1 class="page-title">Cronograma de Rotaciones</h1><p class="page-sub">${students.length} alumno${students.length===1?'':'s'} · ${numWeeks} semanas de pasantía</p></div>
   </div>
   <div class="filters-row">
     <select class="select" data-action="cron-filtro-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${ui.cronFiltroGrupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
@@ -1612,19 +1611,21 @@ function renderCronograma(){
     <table class="cron-table">
       <thead><tr>
         <th class="cron-sticky-col">Alumno</th>
-        ${weeks.map((w,i)=>`<th>S${i+1}<br><span class="cell-muted" style="font-weight:500; font-size:10px;">${fmtDate(w).slice(0,5)}</span></th>`).join('')}
+        ${weekNumbers.map(n=>`<th>S${n}</th>`).join('')}
       </tr></thead>
       <tbody>
       ${students.map(s=>{
         const rots = rotationsOf(s.id);
         return `<tr>
           <td class="cron-sticky-col cell-strong">${esc(s.nombre)} ${esc(s.apellido)}</td>
-          ${weeks.map(w=>{
-            const wEnd = addDays(w,6);
-            const rot = rots.find(r=> r.startDate<=wEnd && r.endDate>=w);
+          ${weekNumbers.map(n=>{
+            // fecha representativa de "semana N" para ESTE alumno en particular, según su propia fecha de inicio
+            const weekStart = addDays(s.fechaInicio, (n-1)*7);
+            const weekEnd = addDays(weekStart, 6);
+            const rot = rots.find(r=> r.startDate<=weekEnd && r.endDate>=weekStart);
             if(!rot) return `<td class="cron-cell cron-cell-empty"></td>`;
             const color = sectionColor(rot.sectionId);
-            return `<td class="cron-cell" style="background:${color}22;" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="${esc(sectionName(rot.sectionId))} · ${esc(teacherName(rot.teacherId))}">
+            return `<td class="cron-cell" style="background:${color}22;" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)}) · ${esc(sectionName(rot.sectionId))} · ${esc(teacherName(rot.teacherId))}">
               <div class="cron-cell-bar" style="background:${color};"></div>
             </td>`;
           }).join('')}
@@ -1633,7 +1634,7 @@ function renderCronograma(){
       </tbody>
     </table>
   </div>
-  <p class="help-text" style="margin-top:10px;">${isAdmin? 'Hacé clic en cualquier celda para editar sección, tutor o fechas. También podés arrastrar una celda y soltarla sobre el nombre de una sección en la leyenda para reasignarla.' : 'Vista de solo lectura.'}</p>
+  <p class="help-text" style="margin-top:10px;">${isAdmin? 'Hacé clic en cualquier celda para editar sección, tutor o fechas. También podés arrastrar una celda y soltarla sobre el nombre de una sección en la leyenda para reasignarla.' : 'Vista de solo lectura.'} Cada fila usa la semana 1 de ese alumno según su propia fecha de inicio.</p>
   `;
 }
 
