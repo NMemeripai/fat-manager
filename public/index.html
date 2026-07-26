@@ -361,6 +361,8 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 .cron-sticky-col{position:sticky; left:0; background:var(--surface); z-index:2; text-align:left !important; padding:8px 12px !important; min-width:160px; border-right:1px solid var(--border);}
 .cron-cell{width:44px; height:34px; padding:3px !important; border-bottom:1px solid var(--border); text-align:center; cursor:pointer;}
 .cron-cell-empty{cursor:default;}
+.cron-cell-addable{cursor:pointer; color:var(--text-3); font-size:15px; font-weight:700; text-align:center; transition:background .12s var(--ease), color .12s var(--ease);}
+.cron-cell-addable:hover{background:var(--accent-softer) !important; color:var(--accent);}
 .cron-cell-bar{height:100%; border-radius:5px; min-height:22px;}
 </style>
 </head>
@@ -1623,9 +1625,13 @@ function renderCronograma(){
             const weekStart = addDays(s.fechaInicio, (n-1)*7);
             const weekEnd = addDays(weekStart, 6);
             const rot = rots.find(r=> r.startDate<=weekEnd && r.endDate>=weekStart);
-            if(!rot) return `<td class="cron-cell cron-cell-empty"></td>`;
+            if(!rot){
+              return isAdmin
+                ? `<td class="cron-cell cron-cell-empty cron-cell-addable" data-action="cron-add" data-student-id="${s.id}" data-week-start="${weekStart}" data-week-end="${weekEnd}" title="Semana ${n} (${fmtDate(weekStart)}) · Sin rotación asignada — clic para crear una">+</td>`
+                : `<td class="cron-cell cron-cell-empty"></td>`;
+            }
             const color = sectionColor(rot.sectionId);
-            return `<td class="cron-cell" style="background:${color}22;" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)}) · ${esc(sectionName(rot.sectionId))} · ${esc(teacherName(rot.teacherId))}">
+            return `<td class="cron-cell" style="background:${color}22;" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)}) · ${esc(sectionName(rot.sectionId))}${rot.empresa?' · '+esc(rot.empresa):''} · ${esc(teacherName(rot.teacherId))}">
               <div class="cron-cell-bar" style="background:${color};"></div>
             </td>`;
           }).join('')}
@@ -1659,6 +1665,8 @@ function cronogramaEditFormHtml(rot){
     <div class="field"><label>Fecha de inicio</label><input class="input" type="date" id="f-cron-inicio" value="${rot.startDate}"></div>
     <div class="field"><label>Fecha de fin</label><input class="input" type="date" id="f-cron-fin" value="${rot.endDate}"></div>
   </div>
+  <div class="field"><label>Empresa</label><input class="input" id="f-cron-empresa" value="${esc(rot.empresa||'')}" placeholder="Nombre de la empresa (opcional)"></div>
+  <div class="field"><label>Observaciones</label><textarea class="input" id="f-cron-observaciones" placeholder="Notas sobre esta rotación">${esc(rot.observaciones||'')}</textarea></div>
   <div class="field"><label>Grupo del alumno</label>
     <select class="select" id="f-cron-grupo" style="width:100%;">
       <option value="">Sin grupo</option>
@@ -1666,6 +1674,34 @@ function cronogramaEditFormHtml(rot){
     </select>
   </div>
   <p class="help-text">Cambiar la sección reasigna automáticamente el tutor al profesor de esa sección, salvo que elijas uno distinto acá.</p>
+  <button class="btn btn-sm btn-danger" type="button" data-action="delete-cron-rotation" data-id="${rot.id}" style="margin-top:6px;">${icon('trash','icon-sm')} Eliminar esta rotación</button>
+  `;
+}
+
+function cronogramaAddFormHtml(data){
+  const student = DB.students.find(s=>s.id===data.studentId);
+  return `
+  <div class="kv" style="margin-bottom:14px;"><dt>Alumno</dt><dd>${esc(student?student.nombre+' '+student.apellido:'—')}</dd></div>
+  <div class="field-row">
+    <div class="field"><label>Sección</label>
+      <select class="select" id="f-cronadd-seccion" style="width:100%;">
+        ${DB.sections.map(s=>`<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Tutor / Profesor</label>
+      <select class="select" id="f-cronadd-tutor" style="width:100%;">
+        <option value="">Usar el de la sección</option>
+        ${DB.teachers.filter(t=>t.rol==='seccion').map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>Fecha de inicio</label><input class="input" type="date" id="f-cronadd-inicio" value="${data.weekStart}"></div>
+    <div class="field"><label>Fecha de fin</label><input class="input" type="date" id="f-cronadd-fin" value="${data.weekEnd}"></div>
+  </div>
+  <div class="field"><label>Empresa</label><input class="input" id="f-cronadd-empresa" placeholder="Nombre de la empresa (opcional)"></div>
+  <div class="field"><label>Observaciones</label><textarea class="input" id="f-cronadd-observaciones" placeholder="Notas sobre esta rotación"></textarea></div>
+  <p class="help-text">Se creó con las fechas de esta semana como referencia; podés ajustarlas para que abarque el período real que necesites.</p>
   `;
 }
 
@@ -2058,6 +2094,7 @@ function renderModal(){
   else if(m.type==='planilla-form'){ title='Nueva Planilla Digital FAT'; body = planillaFormHtml(); }
   else if(m.type==='criterio-form'){ title = m.data? 'Editar criterio':'Nuevo criterio'; body = `<div class="field"><label>Nombre del criterio</label><input class="input" id="f-criterio-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Puntualidad"></div>`; }
   else if(m.type==='cronograma-edit-form'){ title='Editar rotación en el cronograma'; body = cronogramaEditFormHtml(m.data); }
+  else if(m.type==='cronograma-add-form'){ title='Nueva rotación'; body = cronogramaAddFormHtml(m.data); }
   else if(m.type==='usuario-form'){ title = m.data? 'Editar VIEW ADMIN':'Nuevo VIEW ADMIN'; body = usuarioFormHtml(m.data); }
 
   return `
@@ -2437,6 +2474,21 @@ function attachGlobalEvents(){
     }
     else if(action==='new-criterio'){ ui.modal={type:'criterio-form', data:null}; render(); }
     else if(action==='cron-edit'){ ui.modal={type:'cronograma-edit-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
+    else if(action==='cron-add'){
+      ui.modal={type:'cronograma-add-form', data:{ studentId:t.getAttribute('data-student-id'), weekStart:t.getAttribute('data-week-start'), weekEnd:t.getAttribute('data-week-end') }};
+      render();
+    }
+    else if(action==='delete-cron-rotation'){
+      askConfirm({
+        title:'Eliminar rotación',
+        message:'¿Eliminar esta rotación del cronograma? Se perderán los informes semanales y datos cargados en ella. Esta acción no se puede deshacer.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/rotations/'+id); ui.modal=null; await loadDB(); render(); toast('Rotación eliminada'); }
+          catch(e){ toast(e.message||'No se pudo eliminar','red'); }
+        }
+      });
+    }
     else if(action==='new-usuario'){ ui.modal={type:'usuario-form', data:null}; render(); }
     else if(action==='edit-usuario'){ ui.modal={type:'usuario-form', data:(USUARIOS||[]).find(u=>u.id===id)}; render(); }
     else if(action==='reset-usuario-password'){
@@ -2816,11 +2868,21 @@ async function submitModal(action, type, id){
       const rot = DB.rotations.find(r=>r.id===id);
       const sectionId = val('f-cron-seccion'); const teacherId = val('f-cron-tutor')||null;
       const startDate = val('f-cron-inicio'); const endDate = val('f-cron-fin');
+      const empresa = val('f-cron-empresa'); const observaciones = val('f-cron-observaciones');
       const groupId = val('f-cron-grupo')||null;
       if(startDate>endDate){ toast('La fecha de inicio no puede ser posterior a la de fin','red'); return; }
-      await apiFetch('PUT', '/api/rotations/'+id+'/schedule', { sectionId, teacherId, startDate, endDate });
+      await apiFetch('PUT', '/api/rotations/'+id+'/schedule', { sectionId, teacherId, startDate, endDate, empresa, observaciones });
       await apiFetch('PUT', '/api/students/'+rot.studentId+'/group', { groupId });
       await loadDB(); ui.modal=null; render(); toast('Cronograma actualizado');
+    }
+    else if(type==='cronograma-add-form'){
+      const data = ui.modal.data;
+      const sectionId = val('f-cronadd-seccion'); const teacherId = val('f-cronadd-tutor')||undefined;
+      const startDate = val('f-cronadd-inicio'); const endDate = val('f-cronadd-fin');
+      const empresa = val('f-cronadd-empresa'); const observaciones = val('f-cronadd-observaciones');
+      if(startDate>endDate){ toast('La fecha de inicio no puede ser posterior a la de fin','red'); return; }
+      await apiFetch('POST', '/api/rotations', { studentId:data.studentId, sectionId, teacherId, startDate, endDate, empresa, observaciones });
+      await loadDB(); ui.modal=null; render(); toast('Rotación creada');
     }
     else if(type==='usuario-form'){
       const nombre = val('f-usu-nombre'); const username = val('f-usu-username'); const password = val('f-usu-password');
