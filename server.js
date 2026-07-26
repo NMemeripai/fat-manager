@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, AlignmentType, WidthType, BorderStyle, ShadingType } = require('docx');
 const { db, uid, todayISO, logActivity, getActivityLog, getSectionsOrdered, recomputeTotalWeeks, generateRotationsFor, ensureSeed } = require('./db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fat-manager-dev-secret-change-in-production';
@@ -81,9 +82,10 @@ app.get('/api/me', auth, (req, res) => res.json(req.user));
 app.post('/api/upload', auth, upload.single('file'), h(async (req, res) => {
   if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor (faltan variables de entorno).' });
   if (!req.file) return res.status(400).json({ error: 'No se envió ningún archivo' });
+  const ext = extOf(req.file.originalname);
   const result = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { folder: 'fat-manager', resource_type: 'auto', public_id: uid('doc') },
+      { folder: 'fat-manager', resource_type: 'raw', public_id: uid('doc') + ext },
       (err, r) => err ? reject(err) : resolve(r)
     );
     stream.end(req.file.buffer);
@@ -121,7 +123,7 @@ app.post('/api/documentos', auth, upload.single('file'), h(async (req, res) => {
 
   const result = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { folder: 'fat-manager/documentos', resource_type: 'raw', public_id: uid('file') },
+      { folder: 'fat-manager/documentos', resource_type: 'raw', public_id: uid('file') + ext },
       (err, r) => err ? reject(err) : resolve(r)
     );
     stream.end(req.file.buffer);
@@ -600,6 +602,215 @@ app.post('/api/mi-portal/respuesta', auth, requireRole('alumno'), h(async (req, 
   const student = await docData('students', studentId);
   await logActivity(`${student.nombre} ${student.apellido} respondió el seguimiento de la semana ${semana}.`);
   res.status(201).json({ ok: true });
+}));
+
+/* ---------------------------- Planillas Digitales FAT (exclusivo admin + profesor de sección) ---------------------------- */
+function blockAlumno(req, res, next) {
+  if (req.user.role === 'alumno') return res.status(403).json({ error: 'Los alumnos no tienen acceso a este módulo' });
+  next();
+}
+
+app.get('/api/criterios-desempeno', auth, blockAlumno, h(async (req, res) => {
+  const criterios = await allDocs('criteriosDesempeno');
+  criterios.sort((a, b) => (a.orden || 0) - (b.orden || 0));
+  res.json({ criterios });
+}));
+
+app.post('/api/criterios-desempeno', auth, requireRole('admin'), h(async (req, res) => {
+  const { nombre } = req.body || {};
+  if (!nombre) return res.status(400).json({ error: 'El nombre del criterio es obligatorio' });
+  const existing = await allDocs('criteriosDesempeno');
+  const id = uid('crit');
+  await db.collection('criteriosDesempeno').doc(id).set({ nombre, orden: existing.length + 1 });
+  await logActivity(`Se agregó el criterio de desempeño "${nombre}".`);
+  res.status(201).json({ id });
+}));
+
+app.put('/api/criterios-desempeno/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const c = await docData('criteriosDesempeno', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Criterio no encontrado' });
+  const { nombre } = req.body || {};
+  if (!nombre) return res.status(400).json({ error: 'El nombre del criterio es obligatorio' });
+  await db.collection('criteriosDesempeno').doc(req.params.id).update({ nombre });
+  res.json({ ok: true });
+}));
+
+app.delete('/api/criterios-desempeno/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const c = await docData('criteriosDesempeno', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Criterio no encontrado' });
+  await db.collection('criteriosDesempeno').doc(req.params.id).delete();
+  res.json({ ok: true });
+}));
+
+function canTouchPlanilla(user, p) {
+  if (user.role === 'admin') return true;
+  if (user.role === 'seccion') return p.teacherId === user.teacherId;
+  return false;
+}
+
+app.get('/api/planillas', auth, blockAlumno, h(async (req, res) => {
+  let list = await allDocs('planillas');
+  if (req.user.role === 'seccion') list = list.filter(p => p.teacherId === req.user.teacherId);
+  const { studentId, teacherId, sectionId, desde, hasta } = req.query;
+  if (studentId) list = list.filter(p => p.studentId === studentId);
+  if (teacherId) list = list.filter(p => p.teacherId === teacherId);
+  if (sectionId) list = list.filter(p => p.sectionId === sectionId);
+  if (desde) list = list.filter(p => p.fecha >= desde);
+  if (hasta) list = list.filter(p => p.fecha <= hasta);
+  list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  res.json({ planillas: list });
+}));
+
+app.get('/api/planillas/:id', auth, blockAlumno, h(async (req, res) => {
+  const p = await docData('planillas', req.params.id);
+  if (!p) return res.status(404).json({ error: 'Planilla no encontrada' });
+  if (!canTouchPlanilla(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para ver esta planilla' });
+  res.json(p);
+}));
+
+const ASISTENCIA_LABELS = { presente: 'Presente', ausente: 'Ausente', justificado: 'Justificado', tarde: 'Tarde' };
+const DESEMPENO_LABELS = { E: 'E — Excelente', MB: 'MB — Muy Bueno', B: 'B — Bueno', R: 'R — Regular', M: 'M — Malo' };
+const ACCENT_HEX = '2563EB';
+
+function cellText(text, opts) {
+  return new TableCell({
+    width: { size: opts && opts.width || 50, type: WidthType.PERCENTAGE },
+    shading: opts && opts.header ? { type: ShadingType.CLEAR, fill: 'DBEAFE' } : undefined,
+    children: [new Paragraph({ children: [new TextRun({ text: String(text == null ? '—' : text), bold: !!(opts && opts.header) })] })]
+  });
+}
+function dataRow(label, value, label2, value2) {
+  return new TableRow({ children: [cellText(label, { header: true, width: 22 }), cellText(value, { width: 28 }), cellText(label2, { header: true, width: 22 }), cellText(value2, { width: 28 })] });
+}
+function fullTable(rows) {
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows, borders: {
+    top: { style: BorderStyle.SINGLE, size: 2, color: 'E5E7EB' }, bottom: { style: BorderStyle.SINGLE, size: 2, color: 'E5E7EB' },
+    left: { style: BorderStyle.SINGLE, size: 2, color: 'E5E7EB' }, right: { style: BorderStyle.SINGLE, size: 2, color: 'E5E7EB' },
+    insideHorizontal: { style: BorderStyle.SINGLE, size: 2, color: 'E5E7EB' }, insideVertical: { style: BorderStyle.SINGLE, size: 2, color: 'E5E7EB' }
+  }});
+}
+function sectionHeading(text) {
+  return new Paragraph({ heading: HeadingLevel.HEADING_2, spacing: { before: 260, after: 120 }, children: [new TextRun({ text, color: ACCENT_HEX, bold: true })] });
+}
+function bodyParagraph(text) {
+  return new Paragraph({ spacing: { after: 200 }, children: [new TextRun({ text: text || '—' })] });
+}
+function slug(text) {
+  return String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'documento';
+}
+
+async function buildPlanillaDocx(p) {
+  const student = await docData('students', p.studentId);
+  const section = await docData('sections', p.sectionId);
+  const teacher = p.teacherId ? await docData('teachers', p.teacherId) : null;
+  const studentLabel = student ? `${student.nombre} ${student.apellido}` : '—';
+
+  const asistenciaRows = [new TableRow({ children: [cellText('Fecha', { header: true, width: 50 }), cellText('Estado', { header: true, width: 50 })] })];
+  (p.asistencia || []).slice().sort((a, b) => a.fecha.localeCompare(b.fecha)).forEach(a => {
+    asistenciaRows.push(new TableRow({ children: [cellText(a.fecha, { width: 50 }), cellText(ASISTENCIA_LABELS[a.estado] || a.estado, { width: 50 })] }));
+  });
+
+  const criterios = await allDocs('criteriosDesempeno');
+  criterios.sort((a, b) => (a.orden || 0) - (b.orden || 0));
+  const desempenoRows = [new TableRow({ children: [cellText('Criterio', { header: true, width: 60 }), cellText('Calificación', { header: true, width: 40 })] })];
+  criterios.forEach(c => {
+    const val = p.desempeno && p.desempeno[c.id];
+    desempenoRows.push(new TableRow({ children: [cellText(c.nombre, { width: 60 }), cellText(val ? (DESEMPENO_LABELS[val] || val) : '—', { width: 40 })] }));
+  });
+
+  const doc = new Document({
+    sections: [{
+      properties: { page: { margin: { top: 1000, bottom: 1000, left: 1100, right: 1100 } } },
+      children: [
+        new Paragraph({ children: [new TextRun({ text: 'FAT MANAGER', bold: true, color: ACCENT_HEX, size: 20 })] }),
+        new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { after: 60 }, children: [new TextRun({ text: 'Planilla de Seguimiento FAT', bold: true })] }),
+        new Paragraph({ spacing: { after: 240 }, children: [new TextRun({ text: 'Formación en Ambiente de Trabajo', italics: true, color: '6B7280' })] }),
+
+        fullTable([
+          dataRow('Grupo', p.grupo || '—', 'Año', p.anio || '—'),
+          dataRow('Estudiante', studentLabel, 'Fecha', p.fecha || '—'),
+          dataRow('Docente', teacher ? teacher.nombre : '—', 'Sección', section ? section.nombre : '—')
+        ]),
+
+        sectionHeading('Asistencia'),
+        (p.asistencia || []).length ? fullTable(asistenciaRows) : bodyParagraph('Sin registros de asistencia.'),
+
+        sectionHeading('Entorno'),
+        bodyParagraph(p.entorno),
+
+        sectionHeading('Actividades realizadas'),
+        bodyParagraph(p.actividades),
+
+        sectionHeading('Desempeño'),
+        criterios.length ? fullTable(desempenoRows) : bodyParagraph('Sin criterios configurados.'),
+
+        sectionHeading('Observaciones'),
+        bodyParagraph(p.observaciones)
+      ]
+    }]
+  });
+
+  const buffer = await Packer.toBuffer(doc);
+  const filename = `Planilla_FAT_${slug(studentLabel)}_${p.anio || new Date().getFullYear()}.docx`;
+  return { buffer, filename };
+}
+
+app.get('/api/planillas/:id/export-docx', auth, blockAlumno, h(async (req, res) => {
+  const p = await docData('planillas', req.params.id);
+  if (!p) return res.status(404).json({ error: 'Planilla no encontrada' });
+  if (!canTouchPlanilla(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para exportar esta planilla' });
+  const { buffer, filename } = await buildPlanillaDocx(p);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.send(buffer);
+}));
+
+app.post('/api/planillas', auth, requireRole('admin', 'seccion'), h(async (req, res) => {
+  const { studentId, sectionId, grupo, anio, fecha } = req.body || {};
+  if (!studentId || !sectionId) return res.status(400).json({ error: 'Faltan alumno o sección' });
+  const section = await docData('sections', sectionId);
+  const teacherId = req.user.role === 'seccion' ? req.user.teacherId : (section ? section.teacherId : null);
+  if (req.user.role === 'seccion' && section && section.teacherId !== req.user.teacherId) {
+    return res.status(403).json({ error: 'Solo podés crear planillas de tu propia sección' });
+  }
+  const id = uid('pln');
+  const now = new Date().toISOString();
+  const record = {
+    studentId, sectionId, teacherId, grupo: grupo || '', anio: anio || new Date().getFullYear(),
+    fecha: fecha || todayISO(), asistencia: [], entorno: '', actividades: '',
+    desempeno: {}, observaciones: '', createdBy: req.user.sub, createdByNombre: req.user.nombre,
+    createdAt: now, updatedAt: now
+  };
+  await db.collection('planillas').doc(id).set(record);
+  const student = await docData('students', studentId);
+  await logActivity(`${req.user.nombre} creó una Planilla Digital FAT para ${student ? student.nombre + ' ' + student.apellido : 'un alumno'}.`);
+  res.status(201).json({ id, ...record });
+}));
+
+app.put('/api/planillas/:id', auth, h(async (req, res) => {
+  const p = await docData('planillas', req.params.id);
+  if (!p) return res.status(404).json({ error: 'Planilla no encontrada' });
+  if (!canTouchPlanilla(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para editar esta planilla' });
+  const { grupo, anio, fecha, asistencia, entorno, actividades, desempeno, observaciones } = req.body || {};
+  const update = { updatedAt: new Date().toISOString() };
+  if (grupo !== undefined) update.grupo = grupo;
+  if (anio !== undefined) update.anio = anio;
+  if (fecha !== undefined) update.fecha = fecha;
+  if (asistencia !== undefined) update.asistencia = asistencia;
+  if (entorno !== undefined) update.entorno = entorno;
+  if (actividades !== undefined) update.actividades = actividades;
+  if (desempeno !== undefined) update.desempeno = desempeno;
+  if (observaciones !== undefined) update.observaciones = observaciones;
+  await db.collection('planillas').doc(req.params.id).update(update);
+  res.json({ ok: true, updatedAt: update.updatedAt });
+}));
+
+app.delete('/api/planillas/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const p = await docData('planillas', req.params.id);
+  if (!p) return res.status(404).json({ error: 'Planilla no encontrada' });
+  await db.collection('planillas').doc(req.params.id).delete();
+  await logActivity('Se eliminó una Planilla Digital FAT.');
+  res.json({ ok: true });
 }));
 
 app.get('/health', h(async (req, res) => {
