@@ -366,11 +366,13 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 
 let DB = null;
 let SP = null; // datos acotados del Portal de Alumnos (nunca comparte el estado general)
+let DOCS = null; // documentos del Centro de Documentos (solo se cargan cuando el admin entra a esa vista)
+let MY_DOCS = null; // documentos propios (profesor de sección o alumno)
 let session = null;
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
   sort:{ students:{key:'nombre',dir:'asc'}, rotations:{key:'periodo',dir:'asc'} },
   page:{ students:1, rotations:1 },
-  sidebarOpen:false, notifOpen:false, userMenuOpen:false };
+  sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'' };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -463,6 +465,14 @@ async function loadDB(){
 }
 async function loadStudentPortal(){
   SP = await apiFetch('GET', '/api/mi-portal');
+}
+async function loadDocumentos(){
+  const data = await apiFetch('GET', '/api/documentos');
+  DOCS = data.documentos;
+}
+async function loadMyDocumentos(){
+  const data = await apiFetch('GET', '/api/mis-documentos');
+  MY_DOCS = data.documentos;
 }
 async function saveDB(){ /* no-op: cada mutación ya persiste directo en el servidor vía su propio endpoint */ }
 function loadSession(){
@@ -658,6 +668,12 @@ function renderStudentPortalPage(){
       </div>
 
       <div class="section-card">
+        <h3>Mis documentos <button class="btn btn-sm" data-action="new-documento" style="margin-left:auto;">${icon('upload','icon-sm')} Subir documento</button></h3>
+        ${MY_DOCS===null? `<p class="cell-muted" style="font-size:12.5px;">Cargando…</p>` :
+          (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.nombre)}</a>${d.observaciones?' · '+esc(d.observaciones):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
+      </div>
+
+      <div class="section-card">
         <h3>Tu recorrido por secciones</h3>
         <div class="timeline">
           ${SP.rotaciones.map(r=>{
@@ -691,13 +707,7 @@ function renderLogin(err){
         <input class="input" type="password" name="password" id="login-pass" autocomplete="current-password">
       </div>
       <button class="btn btn-primary" style="width:100%; justify-content:center;" type="button" id="login-submit">Iniciar sesión</button>
-      <div class="demo-creds">
-        <strong>Usuarios de demostración</strong><br>
-        Admin: <code>admin</code> / <code>admin2026</code><br>
-        Coordinador FAT: <code>coordinador</code> / <code>coord2026</code><br>
-        Profesor de sección: <code>prof.administracion</code> / <code>prof2026</code>
-      </div>
-      <p class="help-text">Backend real: servidor Express con base de datos SQLite, contraseñas con hash bcrypt y sesión mediante token JWT.</p>
+      <p class="help-text">Backend real: servidor Express con base de datos Firebase Firestore, contraseñas con hash bcrypt y sesión mediante token JWT.</p>
     </div>
   </div>`;
 }
@@ -734,6 +744,7 @@ function renderShell(){
         ${navItem('guidelines','book','Lineamientos')}
         ${navItem('reports','file','Informes')}
         <div class="nav-section-label">Sistema</div>
+        ${navItem('documentos','file','Centro de Documentos', ['admin'])}
         ${navItem('config','sliders','Configuración', ['admin'])}
       </div>
       <div class="sidebar-foot">
@@ -801,6 +812,7 @@ function renderView(){
     case 'pendientes': return renderPendientes();
     case 'guidelines': return renderGuidelines();
     case 'reports': return renderReports();
+    case 'documentos': return session.role==='admin' ? renderDocumentos() : renderDashboard();
     case 'config': return session.role==='admin' ? renderConfig() : renderDashboard();
     default: return renderDashboard();
   }
@@ -874,6 +886,12 @@ function renderTeacherHome(){
       <div class="notif-text"><div class="notif-title">${esc(n.title)}</div><div class="notif-sub">${esc(n.sub)}</div></div>
     </div>`).join('')}
   </div>`:''}
+
+  <div class="section-card">
+    <h3>Mis documentos MEP ${icon('file','icon-sm')} <button class="btn btn-sm" data-action="new-documento" style="margin-left:auto;">${icon('upload','icon-sm')} Subir documento</button></h3>
+    ${MY_DOCS===null? `<p class="cell-muted" style="font-size:12.5px;">${icon('clock','icon-sm')} Cargando…</p>` :
+      (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.slice(0,8).map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.nombre)}</a>${d.studentId?' · '+esc(studentName(d.studentId)):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
+  </div>
   `;
 }
 function quickWeekFormHtml(r){
@@ -1399,6 +1417,88 @@ function renderReports(){
 }
 
 /* ---------------------------- CONFIG (admin) ---------------------------- */
+/* ---------------------------- CENTRO DE DOCUMENTOS (solo admin) ---------------------------- */
+function docIcon(nombre){
+  const ext = (nombre.split('.').pop()||'').toLowerCase();
+  return ext==='pdf' ? 'file' : 'paperclip';
+}
+function renderDocumentos(){
+  if(!DOCS) return `<div class="page-head"><div><h1 class="page-title">Centro de Documentos</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando documentos…</div>`;
+  let list = DOCS.filter(d=>d.tipo===ui.docTab);
+  if(ui.docSearch){
+    const q = ui.docSearch.toLowerCase();
+    list = list.filter(d=> d.nombre.toLowerCase().includes(q) || (d.uploadedByNombre||'').toLowerCase().includes(q) || (d.studentId && studentName(d.studentId).toLowerCase().includes(q)) || (d.observaciones||'').toLowerCase().includes(q));
+  }
+  list = list.slice().sort((a,b)=> (b.createdAt||'').localeCompare(a.createdAt||''));
+  const mepCount = DOCS.filter(d=>d.tipo==='mep').length;
+  const alCount = DOCS.filter(d=>d.tipo==='alumno').length;
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Centro de Documentos</h1><p class="page-sub">${DOCS.length} documento${DOCS.length===1?'':'s'} en total</p></div>
+    <button class="btn btn-primary" data-action="new-documento">${icon('upload','icon-sm')} Subir documento</button>
+  </div>
+  <div class="tabs">
+    <div class="tab ${ui.docTab==='mep'?'active':''}" data-action="doc-tab" data-tab="mep">${icon('file','icon-sm')} Documentos MEP (${mepCount})</div>
+    <div class="tab ${ui.docTab==='alumno'?'active':''}" data-action="doc-tab" data-tab="alumno">${icon('users','icon-sm')} Documentos Alumnos (${alCount})</div>
+  </div>
+  <div class="filters-row">
+    <input class="input" style="min-width:260px;" id="doc-search" placeholder="Buscar por archivo, quien lo subió, alumno u observaciones…" value="${esc(ui.docSearch)}">
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Archivo</th><th>${ui.docTab==='mep'?'Profesor':'Alumno'}</th><th>Alumno relacionado</th><th>Fecha</th><th>Hora</th><th>Observaciones</th><th></th></tr></thead>
+    <tbody>
+    ${list.length? list.map(d=>`
+      <tr>
+        <td class="cell-strong">${icon(docIcon(d.nombre),'icon-sm')} ${esc(d.nombre)}</td>
+        <td>${esc(d.uploadedByNombre)}</td>
+        <td class="cell-muted">${d.studentId? esc(studentName(d.studentId)) : (d.curso? esc(d.curso) : '—')}</td>
+        <td>${fmtDate(d.fecha)}</td>
+        <td class="cell-muted">${esc(d.hora||'—')}</td>
+        <td class="cell-muted">${esc(d.observaciones||'—')}</td>
+        <td style="white-space:nowrap;">
+          <a class="btn btn-sm" href="${esc(d.url)}" target="_blank" rel="noopener">${icon('download','icon-sm')} Ver/Descargar</a>
+          <button class="btn btn-sm btn-danger" data-action="delete-documento" data-id="${d.id}">${icon('trash','icon-sm')}</button>
+        </td>
+      </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin documentos ${ui.docTab==='mep'?'de profesores':'de alumnos'}</div></div></td></tr>`}
+    </tbody>
+  </table>
+  </div>
+  <p class="help-text" style="margin-top:10px;">Los PDF se pueden previsualizar directo en la mayoría de los navegadores; los archivos Word (.doc/.docx) generalmente se descargan, según la configuración de cada navegador.</p>
+  `;
+}
+function documentoFormHtml(){
+  return `
+  <div class="field"><label>Archivo (.pdf, .doc, .docx)</label>
+    <label class="file-drop" for="f-doc-file" id="f-doc-file-label">
+      ${icon('upload')}
+      <div id="f-doc-file-text">Hacé clic para seleccionar un archivo</div>
+    </label>
+    <input type="file" id="f-doc-file" accept=".pdf,.doc,.docx" style="display:none;">
+    <div id="f-doc-progress-wrap" style="display:none; margin-top:10px;">
+      <div class="bar-track"><div class="bar-fill" id="f-doc-progress-bar" style="width:0%;"></div></div>
+    </div>
+  </div>
+  ${session.role==='admin'? `
+  <div class="field"><label>Categoría</label>
+    <select class="select" id="f-doc-tipo" style="width:100%;">
+      <option value="mep">Documentos MEP (profesores)</option>
+      <option value="alumno">Documentos de Alumnos</option>
+    </select>
+  </div>`:''}
+  ${session.role!=='alumno'? `
+  <div class="field"><label>Alumno relacionado (opcional)</label>
+    <select class="select" id="f-doc-alumno" style="width:100%;">
+      <option value="">Sin alumno relacionado</option>
+      ${(DB&&DB.students? DB.students : []).map(s=>`<option value="${s.id}">${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}
+    </select>
+  </div>`:''}
+  <div class="field"><label>Observaciones</label><textarea class="input" id="f-doc-observaciones" placeholder="Notas opcionales sobre este documento"></textarea></div>
+  `;
+}
+
+
 function renderConfig(){
   const c = DB.config;
   const groups = DB.groups || [];
@@ -1483,6 +1583,7 @@ function renderModal(){
   else if(m.type==='objetivo-form'){ title='Nuevo objetivo semanal'; body = `<div class="field-row"><div class="field"><label>Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-obj-semana"></div></div><div class="field"><label>Objetivo</label><textarea class="input" id="f-obj-texto"></textarea></div>`; }
   else if(m.type==='pendiente-form'){ title='Nuevo contenido pendiente'; body = pendienteFormHtml(); }
   else if(m.type==='quick-week-form'){ title='Cargar semana'; body = quickWeekFormHtml(m.data); }
+  else if(m.type==='documento-form'){ title='Subir documento'; body = documentoFormHtml(); }
 
   return `
   <div class="modal-overlay" data-action="close-modal-bg">
@@ -1697,6 +1798,7 @@ function attachLoginEvents(){
       if(session.role==='alumno') await loadStudentPortal();
       else await loadDB();
       render();
+      if(session.role==='seccion' || session.role==='alumno'){ loadMyDocumentos().then(render).catch(()=>{}); }
     }catch(e){
       document.getElementById('app').innerHTML = renderLogin(e.message || 'Usuario o contraseña incorrectos.');
       attachLoginEvents();
@@ -1720,6 +1822,10 @@ function attachGlobalEvents(){
   if(search){
     search.addEventListener('input', e=>{ ui.search = e.target.value; ui.page.students=1; if(ui.view!=='students') ui.view='students'; render(); document.getElementById('global-search').focus(); document.getElementById('global-search').setSelectionRange(999,999); });
   }
+  const docSearch = document.getElementById('doc-search');
+  if(docSearch){
+    docSearch.addEventListener('input', e=>{ ui.docSearch = e.target.value; render(); document.getElementById('doc-search').focus(); document.getElementById('doc-search').setSelectionRange(999,999); });
+  }
 
   if(globalEventsAttached) return; // el #app persiste entre renders (solo cambia su innerHTML);
   globalEventsAttached = true;      // sin este guard, cada render() apilaría un listener más.
@@ -1730,7 +1836,10 @@ function attachGlobalEvents(){
     const action = t.getAttribute('data-action');
     const id = t.getAttribute('data-id');
 
-    if(action==='nav'){ ui.view = t.getAttribute('data-view'); ui.notifOpen=false; ui.sidebarOpen=false; render(); }
+    if(action==='nav'){
+      ui.view = t.getAttribute('data-view'); ui.notifOpen=false; ui.sidebarOpen=false; render();
+      if(ui.view==='documentos' && !DOCS){ try{ await loadDocumentos(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los documentos','red'); } }
+    }
     else if(action==='toggle-theme'){ ui.theme = ui.theme==='light'?'dark':'light'; render(); }
     else if(action==='toggle-notif'){ ui.notifOpen = !ui.notifOpen; render(); }
     else if(action==='toggle-user-menu'){ ui.userMenuOpen = !ui.userMenuOpen; render(); }
@@ -1834,6 +1943,20 @@ function attachGlobalEvents(){
     else if(action==='add-consigna'){ ui.modal={type:'consigna-form', data:null}; render(); }
     else if(action==='add-objetivo'){ ui.modal={type:'objetivo-form', data:null}; render(); }
     else if(action==='new-pendiente'){ ui.modal={type:'pendiente-form', data:null}; render(); }
+    else if(action==='new-documento'){ ui.modal={type:'documento-form', data:null}; render(); }
+    else if(action==='doc-tab'){ ui.docTab = t.getAttribute('data-tab'); render(); }
+    else if(action==='delete-documento'){
+      const docToDel = (DOCS||[]).find(d=>d.id===id);
+      askConfirm({
+        title:'Eliminar documento',
+        message:'¿Eliminar "'+(docToDel?docToDel.nombre:'este documento')+'"? Esta acción no se puede deshacer.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/documentos/'+id); await loadDocumentos(); toast('Documento eliminado'); }
+          catch(e){ toast(e.message||'No se pudo eliminar','red'); }
+        }
+      });
+    }
     else if(action==='quick-week'){ ui.modal={type:'quick-week-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
     else if(action==='save-nota-aprobacion'){
       const n = Number(document.getElementById('cfg-nota-aprobacion').value);
@@ -1848,7 +1971,11 @@ function attachGlobalEvents(){
     else if(action==='export-all-excel'){ exportAllExcel(); }
     else if(action==='export-grades-excel'){ exportGradesExcel(); }
     else if(action==='export-all-pdf'){ exportAllPDF(); }
-    else if(action==='submit-modal'){ await submitModal(action, t.getAttribute('data-type'), t.getAttribute('data-id')); }
+    else if(action==='submit-modal'){
+      const type = t.getAttribute('data-type');
+      if(type==='documento-form') await uploadDocumento();
+      else await submitModal(action, type, t.getAttribute('data-id'));
+    }
     else if(action==='sort-th'){
       const table = t.getAttribute('data-table'); const key = t.getAttribute('data-key');
       const cur = ui.sort[table];
@@ -1884,6 +2011,11 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="pendiente-estado"]')){
       const id = t.getAttribute('data-id'); const estado = t.value;
       apiFetch('PUT', '/api/pendientes/'+id, { estado }).then(async ()=>{ await loadDB(); render(); toast('Estado actualizado'); }).catch(e=> toast(e.message||'No se pudo actualizar', 'red'));
+    }
+    else if(t.id==='f-doc-file'){
+      const f = t.files && t.files[0];
+      const textEl = document.getElementById('f-doc-file-text');
+      if(f && textEl) textEl.textContent = f.name;
     }
     else if(t.id==='f-r-file'){
       const f = t.files && t.files[0];
@@ -1927,6 +2059,55 @@ async function addInformeSemanal(rotId){
     render();
     toast('Registro semanal agregado');
   }catch(e){ toast(e.message||'No se pudo agregar el registro', 'red'); }
+}
+
+async function uploadDocumento(){
+  const fileInput = document.getElementById('f-doc-file');
+  const file = fileInput.files && fileInput.files[0];
+  if(!file){ toast('Elegí un archivo para subir','red'); return; }
+  const allowedExt = ['.pdf','.doc','.docx'];
+  const ext = '.'+(file.name.split('.').pop()||'').toLowerCase();
+  if(!allowedExt.includes(ext)){ toast('Formato no permitido. Solo .pdf, .doc o .docx','red'); return; }
+
+  const fd = new FormData();
+  fd.append('file', file);
+  const tipoEl = document.getElementById('f-doc-tipo');
+  if(tipoEl) fd.append('tipo', tipoEl.value);
+  const alumnoEl = document.getElementById('f-doc-alumno');
+  if(alumnoEl && alumnoEl.value) fd.append('studentId', alumnoEl.value);
+  fd.append('observaciones', document.getElementById('f-doc-observaciones')? document.getElementById('f-doc-observaciones').value : '');
+
+  const progressWrap = document.getElementById('f-doc-progress-wrap');
+  const progressBar = document.getElementById('f-doc-progress-bar');
+  if(progressWrap) progressWrap.style.display='block';
+  const saveBtn = document.querySelector('[data-action="submit-modal"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Subiendo…'; }
+
+  try{
+    await new Promise((resolve, reject)=>{
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', API_BASE+'/api/documentos');
+      xhr.setRequestHeader('Authorization', 'Bearer '+authToken);
+      xhr.upload.onprogress = (e)=>{
+        if(e.lengthComputable && progressBar){ progressBar.style.width = Math.round((e.loaded/e.total)*100)+'%'; }
+      };
+      xhr.onload = ()=>{
+        if(xhr.status>=200 && xhr.status<300) resolve();
+        else{ let msg='No se pudo subir el archivo'; try{ msg = JSON.parse(xhr.responseText).error||msg; }catch(e){} reject(new Error(msg)); }
+      };
+      xhr.onerror = ()=> reject(new Error('Error de conexión al subir el archivo'));
+      xhr.send(fd);
+    });
+    ui.modal = null;
+    if(session.role==='admin'){ await loadDocumentos(); }
+    else { await loadMyDocumentos(); }
+    render();
+    toast('Documento subido correctamente');
+  }catch(e){
+    toast(e.message||'No se pudo subir el archivo', 'red');
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Guardar'; }
+    if(progressWrap) progressWrap.style.display='none';
+  }
 }
 
 async function submitModal(action, type, id){
@@ -2104,6 +2285,7 @@ async function init(){
     try{
       if(session.role==='alumno'){ await loadStudentPortal(); }
       else{ await loadDB(); if(session.role==='seccion') ui.view = 'teacherHome'; }
+      if(session.role==='seccion' || session.role==='alumno'){ loadMyDocumentos().then(render).catch(()=>{}); }
     }catch(e){
       console.error('No se pudo restaurar la sesión', e);
       authToken=null; session=null;
