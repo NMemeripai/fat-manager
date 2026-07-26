@@ -71,6 +71,9 @@ app.post('/api/auth/login', h(async (req, res) => {
   if (!u || !bcrypt.compareSync(password, u.passwordHash)) {
     return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
   }
+  if (u.active === false) {
+    return res.status(403).json({ error: 'Esta cuenta está desactivada. Contactá al administrador.' });
+  }
   const payload = { sub: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId || null, sectionId: u.sectionId || null, studentId: u.studentId || null };
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '12h' });
   res.json({ token, user: payload });
@@ -149,7 +152,7 @@ app.post('/api/documentos', auth, upload.single('file'), h(async (req, res) => {
 }));
 
 function canDownloadDocumento(user, d) {
-  if (user.role === 'admin') return true;
+  if (user.role === 'admin' || user.role === 'viewadmin') return true;
   return d.uploadedBy === user.sub;
 }
 app.get('/api/documentos/:id/download', auth, h(async (req, res) => {
@@ -165,7 +168,7 @@ app.get('/api/documentos/:id/download', auth, h(async (req, res) => {
   res.send(buffer);
 }));
 
-app.get('/api/documentos', auth, requireRole('admin'), h(async (req, res) => {
+app.get('/api/documentos', auth, requireRole('admin', 'viewadmin'), h(async (req, res) => {
   const docs = await allDocs('documentos');
   docs.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   res.json({ documentos: docs });
@@ -416,6 +419,7 @@ function canEditRotation(user, rotation) {
 }
 function canViewRotationAttachment(user, rotation) {
   if (canEditRotation(user, rotation)) return true;
+  if (user.role === 'viewadmin') return true;
   if (user.role === 'alumno') return rotation.studentId === user.studentId;
   return false;
 }
@@ -720,6 +724,10 @@ function canTouchPlanilla(user, p) {
   if (user.role === 'seccion') return p.teacherId === user.teacherId;
   return false;
 }
+function canViewPlanilla(user, p) {
+  if (user.role === 'viewadmin') return true;
+  return canTouchPlanilla(user, p);
+}
 
 app.get('/api/planillas', auth, blockAlumno, h(async (req, res) => {
   let list = await allDocs('planillas');
@@ -737,12 +745,12 @@ app.get('/api/planillas', auth, blockAlumno, h(async (req, res) => {
 app.get('/api/planillas/:id', auth, blockAlumno, h(async (req, res) => {
   const p = await docData('planillas', req.params.id);
   if (!p) return res.status(404).json({ error: 'Planilla no encontrada' });
-  if (!canTouchPlanilla(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para ver esta planilla' });
+  if (!canViewPlanilla(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para ver esta planilla' });
   res.json(p);
 }));
 
 const ASISTENCIA_LABELS = { presente: 'Presente', ausente: 'Ausente', justificado: 'Justificado', tarde: 'Tarde' };
-const DESEMPENO_LABELS = { E: 'E — Excelente', MB: 'MB — Muy Bueno', B: 'B — Bueno', R: 'R — Regular', M: 'M — Malo' };
+const CALIFICACION_LABELS = { E: 'E — Excelente', MB: 'MB — Muy Bueno', B: 'B — Bueno', R: 'R — Regular', M: 'M — Mal Logrado' };
 const ACCENT_HEX = '2563EB';
 
 function cellText(text, opts) {
@@ -783,13 +791,7 @@ async function buildPlanillaDocx(p) {
     asistenciaRows.push(new TableRow({ children: [cellText(a.fecha, { width: 50 }), cellText(ASISTENCIA_LABELS[a.estado] || a.estado, { width: 50 })] }));
   });
 
-  const criterios = await allDocs('criteriosDesempeno');
-  criterios.sort((a, b) => (a.orden || 0) - (b.orden || 0));
-  const desempenoRows = [new TableRow({ children: [cellText('Criterio', { header: true, width: 60 }), cellText('Calificación', { header: true, width: 40 })] })];
-  criterios.forEach(c => {
-    const val = p.desempeno && p.desempeno[c.id];
-    desempenoRows.push(new TableRow({ children: [cellText(c.nombre, { width: 60 }), cellText(val ? (DESEMPENO_LABELS[val] || val) : '—', { width: 40 })] }));
-  });
+  const calificacionRows = [new TableRow({ children: [cellText('Calificación final', { header: true, width: 60 }), cellText(p.calificacion ? (CALIFICACION_LABELS[p.calificacion] || p.calificacion) : '—', { width: 40 })] })];
 
   const doc = new Document({
     sections: [{
@@ -814,8 +816,8 @@ async function buildPlanillaDocx(p) {
         sectionHeading('Actividades realizadas'),
         bodyParagraph(p.actividades),
 
-        sectionHeading('Desempeño'),
-        criterios.length ? fullTable(desempenoRows) : bodyParagraph('Sin criterios configurados.'),
+        sectionHeading('Calificación'),
+        fullTable(calificacionRows),
 
         sectionHeading('Observaciones'),
         bodyParagraph(p.observaciones)
@@ -831,7 +833,7 @@ async function buildPlanillaDocx(p) {
 app.get('/api/planillas/:id/export-docx', auth, blockAlumno, h(async (req, res) => {
   const p = await docData('planillas', req.params.id);
   if (!p) return res.status(404).json({ error: 'Planilla no encontrada' });
-  if (!canTouchPlanilla(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para exportar esta planilla' });
+  if (!canViewPlanilla(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para exportar esta planilla' });
   const { buffer, filename } = await buildPlanillaDocx(p);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
@@ -864,7 +866,7 @@ app.put('/api/planillas/:id', auth, h(async (req, res) => {
   const p = await docData('planillas', req.params.id);
   if (!p) return res.status(404).json({ error: 'Planilla no encontrada' });
   if (!canTouchPlanilla(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para editar esta planilla' });
-  const { grupo, anio, fecha, asistencia, entorno, actividades, desempeno, observaciones } = req.body || {};
+  const { grupo, anio, fecha, asistencia, entorno, actividades, desempeno, calificacion, observaciones } = req.body || {};
   const update = { updatedAt: new Date().toISOString() };
   if (grupo !== undefined) update.grupo = grupo;
   if (anio !== undefined) update.anio = anio;
@@ -873,6 +875,7 @@ app.put('/api/planillas/:id', auth, h(async (req, res) => {
   if (entorno !== undefined) update.entorno = entorno;
   if (actividades !== undefined) update.actividades = actividades;
   if (desempeno !== undefined) update.desempeno = desempeno;
+  if (calificacion !== undefined) update.calificacion = calificacion;
   if (observaciones !== undefined) update.observaciones = observaciones;
   await db.collection('planillas').doc(req.params.id).update(update);
   res.json({ ok: true, updatedAt: update.updatedAt });
@@ -883,6 +886,54 @@ app.delete('/api/planillas/:id', auth, requireRole('admin'), h(async (req, res) 
   if (!p) return res.status(404).json({ error: 'Planilla no encontrada' });
   await db.collection('planillas').doc(req.params.id).delete();
   await logActivity('Se eliminó una Planilla Digital FAT.');
+  res.json({ ok: true });
+}));
+
+/* ---------------------------- Gestión de Usuarios: administra cuentas VIEW ADMIN (solo el admin) ---------------------------- */
+app.get('/api/usuarios', auth, requireRole('admin'), h(async (req, res) => {
+  const users = await allDocs('users');
+  const viewAdmins = users.filter(u => u.role === 'viewadmin')
+    .map(u => ({ id: u.id, username: u.username, nombre: u.nombre, active: u.active !== false }));
+  res.json({ usuarios: viewAdmins });
+}));
+
+app.post('/api/usuarios', auth, requireRole('admin'), h(async (req, res) => {
+  const { nombre, username, password } = req.body || {};
+  if (!nombre || !username || !password) return res.status(400).json({ error: 'Faltan campos obligatorios' });
+  const dupe = await whereEquals('users', 'username', username);
+  if (dupe.length) return res.status(409).json({ error: 'Ese usuario ya existe' });
+  const id = uid('u');
+  await db.collection('users').doc(id).set({
+    username, passwordHash: bcrypt.hashSync(password, 10), role: 'viewadmin', nombre,
+    teacherId: null, sectionId: null, studentId: null, active: true
+  });
+  await logActivity(`Se creó el usuario de solo lectura (VIEW ADMIN) "${nombre}".`);
+  res.status(201).json({ id });
+}));
+
+app.put('/api/usuarios/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const u = await docData('users', req.params.id);
+  if (!u || u.role !== 'viewadmin') return res.status(404).json({ error: 'Usuario VIEW ADMIN no encontrado' });
+  const { nombre, username, password, active } = req.body || {};
+  const update = {};
+  if (nombre !== undefined) update.nombre = nombre;
+  if (username !== undefined) {
+    const dupe = await whereEquals('users', 'username', username);
+    if (dupe.length && dupe[0].id !== req.params.id) return res.status(409).json({ error: 'Ese usuario ya existe' });
+    update.username = username;
+  }
+  if (password) update.passwordHash = bcrypt.hashSync(password, 10);
+  if (active !== undefined) update.active = !!active;
+  await db.collection('users').doc(req.params.id).update(update);
+  await logActivity(`Se actualizó el usuario VIEW ADMIN "${nombre || u.nombre}".`);
+  res.json({ ok: true });
+}));
+
+app.delete('/api/usuarios/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const u = await docData('users', req.params.id);
+  if (!u || u.role !== 'viewadmin') return res.status(404).json({ error: 'Usuario VIEW ADMIN no encontrado' });
+  await db.collection('users').doc(req.params.id).delete();
+  await logActivity(`Se eliminó el usuario VIEW ADMIN "${u.nombre}".`);
   res.json({ ok: true });
 }));
 
