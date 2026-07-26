@@ -95,6 +95,11 @@ app.post('/api/upload', auth, upload.single('file'), h(async (req, res) => {
 
 /* ---------------------------- Centro de Documentos ---------------------------- */
 const ALLOWED_DOC_EXT = ['.pdf', '.doc', '.docx'];
+const DOC_MIME_TYPES = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+};
 function extOf(filename) {
   const i = filename.lastIndexOf('.');
   return i >= 0 ? filename.slice(i).toLowerCase() : '';
@@ -141,6 +146,23 @@ app.post('/api/documentos', auth, upload.single('file'), h(async (req, res) => {
   await db.collection('documentos').doc(id).set(docRecord);
   await logActivity(`${req.user.nombre} subió el documento "${req.file.originalname}".`);
   res.status(201).json({ id, ...docRecord });
+}));
+
+function canDownloadDocumento(user, d) {
+  if (user.role === 'admin') return true;
+  return d.uploadedBy === user.sub;
+}
+app.get('/api/documentos/:id/download', auth, h(async (req, res) => {
+  const d = await docData('documentos', req.params.id);
+  if (!d) return res.status(404).json({ error: 'Documento no encontrado' });
+  if (!canDownloadDocumento(req.user, d)) return res.status(403).json({ error: 'No tenés permiso para descargar este documento' });
+  const upstream = await fetch(d.url);
+  if (!upstream.ok) return res.status(502).json({ error: 'No se pudo obtener el archivo desde el almacenamiento' });
+  const ext = extOf(d.nombre);
+  const buffer = Buffer.from(await upstream.arrayBuffer());
+  res.setHeader('Content-Type', DOC_MIME_TYPES[ext] || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${d.nombre}"; filename*=UTF-8''${encodeURIComponent(d.nombre)}`);
+  res.send(buffer);
 }));
 
 app.get('/api/documentos', auth, requireRole('admin'), h(async (req, res) => {
@@ -392,6 +414,25 @@ function canEditRotation(user, rotation) {
   if (user.role === 'seccion') return rotation.teacherId === user.teacherId;
   return false;
 }
+function canViewRotationAttachment(user, rotation) {
+  if (canEditRotation(user, rotation)) return true;
+  if (user.role === 'alumno') return rotation.studentId === user.studentId;
+  return false;
+}
+app.get('/api/rotations/:id/attachment', auth, h(async (req, res) => {
+  const r = await docData('rotations', req.params.id);
+  if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
+  if (!r.attachmentUrl) return res.status(404).json({ error: 'Esta rotación no tiene ningún adjunto' });
+  if (!canViewRotationAttachment(req.user, r)) return res.status(403).json({ error: 'No tenés permiso para descargar este archivo' });
+  const upstream = await fetch(r.attachmentUrl);
+  if (!upstream.ok) return res.status(502).json({ error: 'No se pudo obtener el archivo desde el almacenamiento' });
+  const name = r.attachmentName || 'adjunto';
+  const ext = extOf(name);
+  const buffer = Buffer.from(await upstream.arrayBuffer());
+  res.setHeader('Content-Type', DOC_MIME_TYPES[ext] || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.send(buffer);
+}));
 app.put('/api/rotations/:id', auth, h(async (req, res) => {
   const r = await docData('rotations', req.params.id);
   if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
