@@ -339,6 +339,20 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
   .brand-name{display:none;}
   .brand-sub{display:none;}
 }
+.planilla-doc{background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--shadow-sm); padding:44px 52px; max-width:820px; margin:0 auto; font-family:'Inter',serif;}
+.planilla-doc-header{display:flex; align-items:center; gap:16px; border-bottom:2px solid var(--accent); padding-bottom:16px; margin-bottom:20px;}
+.planilla-doc-logo{width:52px; height:52px; border-radius:10px; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; flex-shrink:0;}
+.planilla-doc-table{width:100%; border-collapse:collapse; margin-bottom:18px;}
+.planilla-doc-table th{background:var(--surface-2); text-align:left; padding:9px 12px; font-size:12px; font-weight:700; color:var(--text-2); border:1px solid var(--border); width:110px;}
+.planilla-doc-table td{padding:9px 12px; border:1px solid var(--border); font-size:13.5px;}
+.planilla-doc-section-title{font-size:14px; margin:20px 0 8px; padding-bottom:6px; border-bottom:1px solid var(--border); font-family:'Plus Jakarta Sans',sans-serif;}
+.planilla-doc-text{font-size:13.5px; line-height:1.7; white-space:pre-wrap;}
+@media print{
+  body *{visibility:hidden;}
+  #planilla-print-area, #planilla-print-area *{visibility:visible;}
+  #planilla-print-area{position:absolute; left:0; top:0; width:100%; box-shadow:none; border:none; max-width:none;}
+  .no-print, .sidebar, .topbar, .sidebar-scrim{display:none !important;}
+}
 </style>
 </head>
 <body>
@@ -368,11 +382,15 @@ let DB = null;
 let SP = null; // datos acotados del Portal de Alumnos (nunca comparte el estado general)
 let DOCS = null; // documentos del Centro de Documentos (solo se cargan cuando el admin entra a esa vista)
 let MY_DOCS = null; // documentos propios (profesor de sección o alumno)
+let PLANILLAS = null; // listado de Planillas Digitales FAT (admin: todas; profesor: propias)
+let CRITERIOS = null; // criterios de desempeño configurables
+let currentPlanillaId = null; // planilla abierta actualmente (vista detalle)
+let planillaViewMode = 'documento'; // 'documento' (estilo Word, solo lectura) | 'form' (edición)
 let session = null;
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
   sort:{ students:{key:'nombre',dir:'asc'}, rotations:{key:'periodo',dir:'asc'} },
   page:{ students:1, rotations:1 },
-  sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'' };
+  sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', plnFilters:{} };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -473,6 +491,70 @@ async function loadDocumentos(){
 async function loadMyDocumentos(){
   const data = await apiFetch('GET', '/api/mis-documentos');
   MY_DOCS = data.documentos;
+}
+async function loadPlanillas(){
+  const f = ui.plnFilters;
+  const params = new URLSearchParams();
+  if(f.studentId) params.set('studentId', f.studentId);
+  if(f.teacherId) params.set('teacherId', f.teacherId);
+  if(f.sectionId) params.set('sectionId', f.sectionId);
+  if(f.desde) params.set('desde', f.desde);
+  if(f.hasta) params.set('hasta', f.hasta);
+  const qs = params.toString();
+  const data = await apiFetch('GET', '/api/planillas'+(qs?'?'+qs:''));
+  PLANILLAS = data.planillas;
+}
+async function loadCriterios(){
+  const data = await apiFetch('GET', '/api/criterios-desempeno');
+  CRITERIOS = data.criterios;
+}
+async function loadPlanillaDetalle(id){
+  currentPlanillaId = id;
+  const p = await apiFetch('GET', '/api/planillas/'+id);
+  if(!PLANILLAS) PLANILLAS = [];
+  const idx = PLANILLAS.findIndex(x=>x.id===id);
+  if(idx>=0) PLANILLAS[idx]=p; else PLANILLAS.push(p);
+  if(!CRITERIOS) await loadCriterios();
+}
+function getPlanilla(id){ return (PLANILLAS||[]).find(p=>p.id===id); }
+let planillaSaveTimer = null;
+async function exportPlanillaDocx(id){
+  try{
+    toast('Generando el documento Word…');
+    const res = await fetch(API_BASE+'/api/planillas/'+id+'/export-docx', { headers: { Authorization: 'Bearer '+authToken } });
+    if(!res.ok){
+      let msg = 'No se pudo generar el documento';
+      try{ msg = (await res.json()).error || msg; }catch(e){}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    let filename = 'Planilla_FAT.docx';
+    const cd = res.headers.get('Content-Disposition');
+    if(cd){ const m = cd.match(/filename="([^"]+)"/); if(m) filename = m[1]; }
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(blobUrl), 4000);
+    toast('Documento Word descargado');
+  }catch(e){
+    toast(e.message||'No se pudo descargar el documento', 'red');
+  }
+}
+function autosavePlanilla(partial){
+  const statusEl = document.getElementById('pln-save-status');
+  if(statusEl) statusEl.textContent = 'Guardando…';
+  clearTimeout(planillaSaveTimer);
+  planillaSaveTimer = setTimeout(async ()=>{
+    try{
+      await apiFetch('PUT', '/api/planillas/'+currentPlanillaId, partial);
+      const el = document.getElementById('pln-save-status');
+      if(el) el.textContent = 'Guardado ✓ '+new Date().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});
+    }catch(e){
+      const el = document.getElementById('pln-save-status');
+      if(el){ el.textContent = 'No se pudo guardar: '+(e.message||'error'); el.style.color='var(--red)'; }
+    }
+  }, 700);
 }
 async function saveDB(){ /* no-op: cada mutación ya persiste directo en el servidor vía su propio endpoint */ }
 function loadSession(){
@@ -670,7 +752,7 @@ function renderStudentPortalPage(){
       <div class="section-card">
         <h3>Mis documentos <button class="btn btn-sm" data-action="new-documento" style="margin-left:auto;">${icon('upload','icon-sm')} Subir documento</button></h3>
         ${MY_DOCS===null? `<p class="cell-muted" style="font-size:12.5px;">Cargando…</p>` :
-          (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.nombre)}</a>${d.observaciones?' · '+esc(d.observaciones):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
+          (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="${esc(d.url)}" target="_blank" rel="noopener" download="${esc(d.nombre)}">${esc(d.nombre)}</a>${d.observaciones?' · '+esc(d.observaciones):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
       </div>
 
       <div class="section-card">
@@ -684,7 +766,10 @@ function renderStudentPortalPage(){
         </div>
       </div>
     </div>
-  </div>`;
+  </div>
+  ${ui.modal? renderModal() : ''}
+  ${ui.confirm? renderConfirmModal() : ''}
+  `;
 }
 
 
@@ -744,6 +829,7 @@ function renderShell(){
         ${navItem('guidelines','book','Lineamientos')}
         ${navItem('reports','file','Informes')}
         <div class="nav-section-label">Sistema</div>
+        ${navItem('planillas','file','Planillas Digitales FAT', ['admin','seccion'])}
         ${navItem('documentos','file','Centro de Documentos', ['admin'])}
         ${navItem('config','sliders','Configuración', ['admin'])}
       </div>
@@ -812,6 +898,8 @@ function renderView(){
     case 'pendientes': return renderPendientes();
     case 'guidelines': return renderGuidelines();
     case 'reports': return renderReports();
+    case 'planillas': return (session.role==='admin'||session.role==='seccion') ? renderPlanillas() : renderDashboard();
+    case 'planilla-detalle': return renderPlanillaDetalle();
     case 'documentos': return session.role==='admin' ? renderDocumentos() : renderDashboard();
     case 'config': return session.role==='admin' ? renderConfig() : renderDashboard();
     default: return renderDashboard();
@@ -888,9 +976,9 @@ function renderTeacherHome(){
   </div>`:''}
 
   <div class="section-card">
-    <h3>Mis documentos MEP ${icon('file','icon-sm')} <button class="btn btn-sm" data-action="new-documento" style="margin-left:auto;">${icon('upload','icon-sm')} Subir documento</button></h3>
+    <h3>Mis documentos MEP ${icon('file','icon-sm')} <span style="margin-left:auto; display:flex; gap:6px;"><button class="btn btn-sm" data-action="new-planilla">${icon('edit','icon-sm')} Completar Planilla FAT</button><button class="btn btn-sm" data-action="new-documento">${icon('upload','icon-sm')} Subir documento</button></span></h3>
     ${MY_DOCS===null? `<p class="cell-muted" style="font-size:12.5px;">${icon('clock','icon-sm')} Cargando…</p>` :
-      (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.slice(0,8).map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.nombre)}</a>${d.studentId?' · '+esc(studentName(d.studentId)):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
+      (MY_DOCS.length? `<ul class="mono-list">${MY_DOCS.slice(0,8).map(d=>`<li><span>${icon(docIcon(d.nombre),'icon-sm')} <a href="${esc(d.url)}" target="_blank" rel="noopener" download="${esc(d.nombre)}">${esc(d.nombre)}</a>${d.studentId?' · '+esc(studentName(d.studentId)):''}</span><span class="cell-muted">${fmtDate(d.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state" style="padding:20px;">Todavía no subiste ningún documento.</div>`)}
   </div>
   `;
 }
@@ -1185,7 +1273,7 @@ function renderRotationBlock(r){
     ${(r.respuestasAlumno||[]).length? `<div style="margin-top:8px;"><strong style="font-size:12.5px;">Respuestas del alumno</strong><ul class="mono-list">${r.respuestasAlumno.slice().sort((a,b)=>a.semana-b.semana).map(rp=>`<li><span>Semana ${rp.semana}: ${rp.leido?'✓ leyó':'✗ no leyó'} · ${rp.actividadRealizada?'✓ hizo la actividad':'✗ no hizo la actividad'}${rp.observacion?' · "'+esc(rp.observacion)+'"':''}</span><span class="cell-muted">${fmtDate(rp.fecha)}</span></li>`).join('')}</ul></div>`:''}
     ${r.informeFinal? `<p style="margin-top:8px;"><strong>Informe final:</strong> ${esc(r.informeFinal)}</p>`:''}
     ${r.comentarios? `<p style="margin-top:6px;"><strong>Comentarios:</strong> ${esc(r.comentarios)}</p>`:''}
-    ${r.attachmentUrl? `<p style="margin-top:6px;"><strong>Adjunto:</strong> <a href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener">${esc(r.attachmentName||'Ver archivo')}</a></p>`:''}
+    ${r.attachmentUrl? `<p style="margin-top:6px;"><strong>Adjunto:</strong> <a href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener" download="${esc(r.attachmentName||'adjunto')}">${esc(r.attachmentName||'Ver archivo')}</a></p>`:''}
   </div>`;
 }
 
@@ -1422,6 +1510,198 @@ function docIcon(nombre){
   const ext = (nombre.split('.').pop()||'').toLowerCase();
   return ext==='pdf' ? 'file' : 'paperclip';
 }
+/* ---------------------------- PLANILLAS DIGITALES FAT (admin + profesor de sección) ---------------------------- */
+const DESEMPENO_ESCALA = [
+  {v:'E', l:'Excelente'}, {v:'MB', l:'Muy Bueno'}, {v:'B', l:'Bueno'}, {v:'R', l:'Regular'}, {v:'M', l:'Malo'}
+];
+const ASISTENCIA_ESTADOS = [
+  {v:'presente', l:'Presente', c:'green'}, {v:'ausente', l:'Ausente', c:'red'},
+  {v:'justificado', l:'Justificado', c:'amber'}, {v:'tarde', l:'Tarde', c:'accent'}
+];
+function asistenciaBadge(estado){
+  const e = ASISTENCIA_ESTADOS.find(a=>a.v===estado) || {l:estado, c:'neutral'};
+  return `<span class="badge badge-${e.c}">${e.l}</span>`;
+}
+
+function renderPlanillas(){
+  if(!PLANILLAS) return `<div class="page-head"><div><h1 class="page-title">Planillas Digitales FAT</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
+  const isAdmin = session.role==='admin';
+  const f = ui.plnFilters;
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Planillas Digitales FAT</h1><p class="page-sub">${PLANILLAS.length} planilla${PLANILLAS.length===1?'':'s'} · exclusivo Profesores MEP y Administración</p></div>
+    <button class="btn btn-primary" data-action="new-planilla">${icon('plus','icon-sm')} Nueva planilla</button>
+  </div>
+  ${isAdmin? `<div class="filters-row">
+    <select class="select" data-action="filter-pln-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+    <select class="select" data-action="filter-pln-alumno"><option value="">Todos los alumnos</option>${DB.students.map(s=>`<option value="${s.id}" ${f.studentId===s.id?'selected':''}>${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}</select>
+    <select class="select" data-action="filter-pln-profesor"><option value="">Todos los profesores</option>${DB.teachers.filter(t=>t.rol==='seccion').map(t=>`<option value="${t.id}" ${f.teacherId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}</select>
+    <input class="input" type="date" data-action="filter-pln-desde" value="${f.desde||''}" title="Desde">
+    <input class="input" type="date" data-action="filter-pln-hasta" value="${f.hasta||''}" title="Hasta">
+  </div>`:''}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Alumno</th><th>Sección</th><th>Profesor</th><th>Grupo</th><th>Fecha</th><th>Última edición</th><th></th></tr></thead>
+    <tbody>
+    ${PLANILLAS.length? PLANILLAS.map(p=>`
+      <tr class="clickable" data-action="open-planilla" data-id="${p.id}">
+        <td class="cell-strong">${esc(studentName(p.studentId))}</td>
+        <td>${esc(sectionName(p.sectionId))}</td>
+        <td class="cell-muted">${esc(teacherName(p.teacherId))}</td>
+        <td>${esc(p.grupo||'—')}</td>
+        <td>${fmtDate(p.fecha)}</td>
+        <td class="cell-muted">${p.updatedAt? fmtRelative(p.updatedAt) : '—'}</td>
+        <td>${(isAdmin||p.teacherId===session.teacherId)? `<button class="btn btn-sm btn-danger" data-action="delete-planilla" data-id="${p.id}">${icon('trash','icon-sm')}</button>`:''}</td>
+      </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin planillas todavía</div></div></td></tr>`}
+    </tbody>
+  </table>
+  </div>
+  `;
+}
+
+function planillaFormHtml(){
+  const isAdmin = session.role==='admin';
+  return `
+  <div class="field-row">
+    <div class="field"><label>Alumno</label>
+      <select class="select" id="f-pln-alumno" style="width:100%;">
+        ${DB.students.map(s=>`<option value="${s.id}">${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Sección</label>
+      <select class="select" id="f-pln-seccion" style="width:100%;">
+        ${(isAdmin? DB.sections : DB.sections.filter(s=>s.teacherId===session.teacherId)).map(s=>`<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field"><label>Grupo</label><input class="input" id="f-pln-grupo" placeholder="ej. Grupo A"></div>
+    <div class="field"><label>Año</label><input class="input" type="number" id="f-pln-anio" value="${new Date().getFullYear()}"></div>
+  </div>
+  <div class="field"><label>Fecha</label><input class="input" type="date" id="f-pln-fecha" value="${todayISO()}"></div>
+  `;
+}
+
+function renderPlanillaDetalle(){
+  const p = getPlanilla(currentPlanillaId);
+  if(!p) return `<div class="empty-state">Cargando planilla…</div>`;
+  const canEdit = session.role==='admin' || p.teacherId===session.teacherId;
+  return planillaViewMode==='form' && canEdit ? renderPlanillaForm(p) : renderPlanillaDocumento(p);
+}
+
+function renderPlanillaDocumento(p){
+  const student = DB.students.find(s=>s.id===p.studentId);
+  const canEdit = session.role==='admin' || p.teacherId===session.teacherId;
+  return `
+  <div class="page-head no-print">
+    <div><button class="btn btn-ghost btn-sm" data-action="back-planillas">← Volver a Planillas</button></div>
+    <div style="display:flex; gap:8px;">
+      ${canEdit? `<button class="btn btn-primary btn-sm" data-action="edit-planilla">${icon('edit','icon-sm')} Editar</button>`:''}
+      <button class="btn btn-sm" data-action="print-planilla">${icon('download','icon-sm')} Imprimir / Descargar PDF</button>
+      <button class="btn btn-sm btn-primary" data-action="export-planilla-docx" data-id="${p.id}">${icon('file','icon-sm')} Descargar Word (.docx)</button>
+    </div>
+  </div>
+  <div class="planilla-doc" id="planilla-print-area">
+    <div class="planilla-doc-header">
+      <div class="planilla-doc-logo">FAT</div>
+      <div>
+        <h2 style="font-size:18px;">Planilla de Seguimiento FAT</h2>
+        <p class="cell-muted" style="font-size:12px;">Formación en Ambiente de Trabajo</p>
+      </div>
+    </div>
+    <table class="planilla-doc-table">
+      <tr><th>Grupo</th><td>${esc(p.grupo||'—')}</td><th>Año</th><td>${esc(String(p.anio||'—'))}</td></tr>
+      <tr><th>Estudiante</th><td>${esc(student? student.nombre+' '+student.apellido : '—')}</td><th>Fecha</th><td>${fmtDate(p.fecha)}</td></tr>
+      <tr><th>Docente</th><td>${esc(teacherName(p.teacherId))}</td><th>Sección</th><td>${esc(sectionName(p.sectionId))}</td></tr>
+    </table>
+
+    <h3 class="planilla-doc-section-title">Asistencia</h3>
+    ${(p.asistencia||[]).length? `<table class="planilla-doc-table">
+      <tr><th>Fecha</th><th>Estado</th></tr>
+      ${p.asistencia.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(a=>`<tr><td>${fmtDate(a.fecha)}</td><td>${asistenciaBadge(a.estado)}</td></tr>`).join('')}
+    </table>` : `<p class="cell-muted">Sin registros de asistencia.</p>`}
+
+    <h3 class="planilla-doc-section-title">Entorno</h3>
+    <p class="planilla-doc-text">${esc(p.entorno)||'—'}</p>
+
+    <h3 class="planilla-doc-section-title">Actividades realizadas</h3>
+    <p class="planilla-doc-text">${esc(p.actividades)||'—'}</p>
+
+    <h3 class="planilla-doc-section-title">Desempeño</h3>
+    ${CRITERIOS && CRITERIOS.length? `<table class="planilla-doc-table">
+      <tr><th>Criterio</th><th>Calificación</th></tr>
+      ${CRITERIOS.map(c=>`<tr><td>${esc(c.nombre)}</td><td>${(p.desempeno&&p.desempeno[c.id])? esc(p.desempeno[c.id]) : '—'}</td></tr>`).join('')}
+    </table>`:''}
+
+    <h3 class="planilla-doc-section-title">Observaciones</h3>
+    <p class="planilla-doc-text">${esc(p.observaciones)||'—'}</p>
+  </div>
+  `;
+}
+
+function renderPlanillaForm(p){
+  const student = DB.students.find(s=>s.id===p.studentId);
+  return `
+  <div class="page-head no-print">
+    <div><button class="btn btn-ghost btn-sm" data-action="view-planilla-doc">← Volver a la vista de documento</button></div>
+    <span id="pln-save-status" class="cell-muted" style="font-size:12px;">Todos los cambios se guardan automáticamente</span>
+  </div>
+  <div class="section-card">
+    <h3>Datos generales</h3>
+    <div class="kv" style="margin-bottom:10px;">
+      <dt>Alumno</dt><dd>${esc(student? student.nombre+' '+student.apellido:'—')}</dd>
+      <dt>Sección</dt><dd>${esc(sectionName(p.sectionId))}</dd>
+      <dt>Docente</dt><dd>${esc(teacherName(p.teacherId))}</dd>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Grupo</label><input class="input pln-autosave" data-field="grupo" value="${esc(p.grupo||'')}"></div>
+      <div class="field"><label>Año</label><input class="input pln-autosave" data-field="anio" type="number" value="${p.anio||''}"></div>
+    </div>
+    <div class="field"><label>Fecha</label><input class="input pln-autosave" data-field="fecha" type="date" value="${p.fecha||''}"></div>
+  </div>
+
+  <div class="section-card">
+    <h3>Asistencia <button class="btn btn-sm" type="button" data-action="add-asistencia">${icon('plus','icon-sm')} Agregar día</button></h3>
+    <div class="field-row" style="align-items:flex-end;">
+      <div class="field"><label>Fecha</label><input class="input" type="date" id="f-asis-fecha" value="${todayISO()}"></div>
+      <div class="field"><label>Estado</label>
+        <select class="select" id="f-asis-estado" style="width:100%;">
+          ${ASISTENCIA_ESTADOS.map(a=>`<option value="${a.v}">${a.l}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    ${(p.asistencia||[]).length? `<ul class="mono-list">${p.asistencia.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).map((a,i)=>`<li><span>${fmtDate(a.fecha)} — ${asistenciaBadge(a.estado)}</span><span class="tag-remove" data-action="del-asistencia" data-fecha="${a.fecha}">${icon('x','icon-sm')}</span></li>`).join('')}</ul>`:`<p class="cell-muted" style="font-size:12.5px;">Sin días cargados.</p>`}
+  </div>
+
+  <div class="section-card">
+    <h3>Entorno</h3>
+    <textarea class="input pln-autosave" data-field="entorno" style="min-height:100px;" placeholder="Describí el entorno donde el alumno realizó la práctica">${esc(p.entorno||'')}</textarea>
+  </div>
+
+  <div class="section-card">
+    <h3>Actividades realizadas</h3>
+    <textarea class="input pln-autosave" data-field="actividades" style="min-height:140px;" placeholder="Detalle de todas las actividades realizadas por el alumno">${esc(p.actividades||'')}</textarea>
+  </div>
+
+  <div class="section-card">
+    <h3>Desempeño</h3>
+    ${CRITERIOS && CRITERIOS.length? CRITERIOS.map(c=>`
+      <div class="field-row" style="align-items:center; margin-bottom:8px;">
+        <div style="font-size:13.5px; font-weight:600;">${esc(c.nombre)}</div>
+        <select class="select pln-desempeno" data-criterio="${c.id}" style="width:100%;">
+          <option value="">Sin calificar</option>
+          ${DESEMPENO_ESCALA.map(e=>`<option value="${e.v}" ${(p.desempeno&&p.desempeno[c.id]===e.v)?'selected':''}>${e.v} — ${e.l}</option>`).join('')}
+        </select>
+      </div>`).join('') : `<p class="cell-muted">No hay criterios de desempeño configurados. El administrador puede agregarlos en Configuración.</p>`}
+  </div>
+
+  <div class="section-card">
+    <h3>Observaciones</h3>
+    <textarea class="input pln-autosave" data-field="observaciones" style="min-height:100px;" placeholder="Observaciones libres">${esc(p.observaciones||'')}</textarea>
+  </div>
+  `;
+}
+
 function renderDocumentos(){
   if(!DOCS) return `<div class="page-head"><div><h1 class="page-title">Centro de Documentos</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando documentos…</div>`;
   let list = DOCS.filter(d=>d.tipo===ui.docTab);
@@ -1458,7 +1738,7 @@ function renderDocumentos(){
         <td class="cell-muted">${esc(d.hora||'—')}</td>
         <td class="cell-muted">${esc(d.observaciones||'—')}</td>
         <td style="white-space:nowrap;">
-          <a class="btn btn-sm" href="${esc(d.url)}" target="_blank" rel="noopener">${icon('download','icon-sm')} Ver/Descargar</a>
+          <a class="btn btn-sm" href="${esc(d.url)}" target="_blank" rel="noopener" download="${esc(d.nombre)}">${icon('download','icon-sm')} Ver/Descargar</a>
           <button class="btn btn-sm btn-danger" data-action="delete-documento" data-id="${d.id}">${icon('trash','icon-sm')}</button>
         </td>
       </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin documentos ${ui.docTab==='mep'?'de profesores':'de alumnos'}</div></div></td></tr>`}
@@ -1536,6 +1816,16 @@ function renderConfig(){
   </div>
 
   <div class="section-card">
+    <h3>Criterios de desempeño (Planilla Digital FAT) <button class="btn btn-sm" data-action="new-criterio">${icon('plus','icon-sm')} Nuevo criterio</button></h3>
+    ${CRITERIOS===null? `<p class="cell-muted" style="font-size:12.5px;">Cargando…</p>` : (CRITERIOS.length? `<ul class="mono-list">${CRITERIOS.map(c=>`<li><span>${esc(c.nombre)}</span>
+        <span style="display:flex; gap:10px; align-items:center;">
+          <span class="tag-remove" data-action="edit-criterio" data-id="${c.id}">${icon('edit','icon-sm')}</span>
+          <span class="tag-remove" data-action="delete-criterio" data-id="${c.id}">${icon('x','icon-sm')}</span>
+        </span></li>`).join('')}</ul>` : `<div class="empty-state">Sin criterios cargados todavía</div>`)}
+    <p class="help-text">Se califican con la escala E (Excelente), MB (Muy Bueno), B (Bueno), R (Regular), M (Malo) al completar cada Planilla Digital FAT.</p>
+  </div>
+
+  <div class="section-card">
     <h3>Profesores <button class="btn btn-sm" data-action="new-teacher">${icon('plus','icon-sm')} Nuevo profesor</button></h3>
     <div class="table-wrap" style="box-shadow:none;">
     <table>
@@ -1584,6 +1874,8 @@ function renderModal(){
   else if(m.type==='pendiente-form'){ title='Nuevo contenido pendiente'; body = pendienteFormHtml(); }
   else if(m.type==='quick-week-form'){ title='Cargar semana'; body = quickWeekFormHtml(m.data); }
   else if(m.type==='documento-form'){ title='Subir documento'; body = documentoFormHtml(); }
+  else if(m.type==='planilla-form'){ title='Nueva Planilla Digital FAT'; body = planillaFormHtml(); }
+  else if(m.type==='criterio-form'){ title = m.data? 'Editar criterio':'Nuevo criterio'; body = `<div class="field"><label>Nombre del criterio</label><input class="input" id="f-criterio-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Puntualidad"></div>`; }
 
   return `
   <div class="modal-overlay" data-action="close-modal-bg">
@@ -1740,7 +2032,7 @@ function rotationFormHtml(r){
       <input type="file" id="f-r-file" style="display:none;">
       <input type="hidden" id="f-r-file-name" value="${esc(r.attachmentName||'')}">
       <input type="hidden" id="f-r-file-url" value="${esc(r.attachmentUrl||'')}">
-      <div id="f-r-file-chip">${r.attachmentUrl? `<a class="file-chip" href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener" style="text-decoration:none;">${icon('paperclip','icon-sm')} ${esc(r.attachmentName||'Ver archivo')}</a>` : (r.attachmentName? `<div class="file-chip">${icon('paperclip','icon-sm')} ${esc(r.attachmentName)}</div>` : '')}</div>
+      <div id="f-r-file-chip">${r.attachmentUrl? `<a class="file-chip" href="${esc(r.attachmentUrl)}" target="_blank" rel="noopener" download="${esc(r.attachmentName||'adjunto')}" style="text-decoration:none;">${icon('paperclip','icon-sm')} ${esc(r.attachmentName||'Ver archivo')}</a>` : (r.attachmentName? `<div class="file-chip">${icon('paperclip','icon-sm')} ${esc(r.attachmentName)}</div>` : '')}</div>
       <p class="help-text">El archivo se sube a Cloudinary y queda con un enlace real para descargar o ver.</p>
     </div>
   </div>
@@ -1830,6 +2122,16 @@ function attachGlobalEvents(){
   if(globalEventsAttached) return; // el #app persiste entre renders (solo cambia su innerHTML);
   globalEventsAttached = true;      // sin este guard, cada render() apilaría un listener más.
 
+  app.addEventListener('input', (e)=>{
+    const t = e.target;
+    if(t.classList && t.classList.contains('pln-autosave')){
+      const field = t.getAttribute('data-field');
+      const p = getPlanilla(currentPlanillaId);
+      if(p) p[field] = t.value;
+      autosavePlanilla({ [field]: t.value });
+    }
+  });
+
   app.addEventListener('click', async (e)=>{
     const t = e.target.closest('[data-action]');
     if(!t) return;
@@ -1839,6 +2141,8 @@ function attachGlobalEvents(){
     if(action==='nav'){
       ui.view = t.getAttribute('data-view'); ui.notifOpen=false; ui.sidebarOpen=false; render();
       if(ui.view==='documentos' && !DOCS){ try{ await loadDocumentos(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los documentos','red'); } }
+      if(ui.view==='planillas'){ try{ await Promise.all([loadPlanillas(), CRITERIOS?Promise.resolve():loadCriterios()]); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas','red'); } }
+      if(ui.view==='config' && !CRITERIOS && session.role==='admin'){ try{ await loadCriterios(); render(); }catch(e){ /* no crítico */ } }
     }
     else if(action==='toggle-theme'){ ui.theme = ui.theme==='light'?'dark':'light'; render(); }
     else if(action==='toggle-notif'){ ui.notifOpen = !ui.notifOpen; render(); }
@@ -1922,6 +2226,20 @@ function attachGlobalEvents(){
         }
       });
     }
+    else if(action==='new-criterio'){ ui.modal={type:'criterio-form', data:null}; render(); }
+    else if(action==='edit-criterio'){ ui.modal={type:'criterio-form', data:(CRITERIOS||[]).find(c=>c.id===id)}; render(); }
+    else if(action==='delete-criterio'){
+      const cForDel = (CRITERIOS||[]).find(c=>c.id===id);
+      askConfirm({
+        title:'Eliminar criterio',
+        message:'¿Eliminar "'+(cForDel?cForDel.nombre:'')+'"? Las planillas que ya lo tengan calificado conservan el dato histórico.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE', '/api/criterios-desempeno/'+id); await loadCriterios(); toast('Criterio eliminado'); }
+          catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
+        }
+      });
+    }
     else if(action==='new-teacher'){ ui.modal={type:'teacher-form', data:null}; render(); }
     else if(action==='edit-teacher'){ ui.modal={type:'teacher-form', data:DB.teachers.find(x=>x.id===id)}; render(); }
     else if(action==='delete-teacher'){
@@ -1944,6 +2262,45 @@ function attachGlobalEvents(){
     else if(action==='add-objetivo'){ ui.modal={type:'objetivo-form', data:null}; render(); }
     else if(action==='new-pendiente'){ ui.modal={type:'pendiente-form', data:null}; render(); }
     else if(action==='new-documento'){ ui.modal={type:'documento-form', data:null}; render(); }
+    else if(action==='new-planilla'){ ui.modal={type:'planilla-form', data:null}; render(); }
+    else if(action==='open-planilla'){
+      ui.view='planilla-detalle'; planillaViewMode='documento'; render();
+      try{ await loadPlanillaDetalle(id); render(); }catch(e){ toast(e.message||'No se pudo cargar la planilla','red'); ui.view='planillas'; render(); }
+    }
+    else if(action==='back-planillas'){ ui.view='planillas'; render(); }
+    else if(action==='edit-planilla'){ planillaViewMode='form'; render(); }
+    else if(action==='view-planilla-doc'){ planillaViewMode='documento'; render(); }
+    else if(action==='print-planilla'){ window.print(); }
+    else if(action==='export-planilla-docx'){ await exportPlanillaDocx(id); }
+    else if(action==='delete-planilla'){
+      const p = getPlanilla(id) || (PLANILLAS||[]).find(x=>x.id===id);
+      askConfirm({
+        title:'Eliminar planilla', message:'¿Eliminar esta Planilla Digital FAT? Esta acción no se puede deshacer.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/planillas/'+id); PLANILLAS=(PLANILLAS||[]).filter(x=>x.id!==id); render(); toast('Planilla eliminada'); }
+          catch(e){ toast(e.message||'No se pudo eliminar','red'); }
+        }
+      });
+    }
+    else if(action==='add-asistencia'){
+      const fecha = document.getElementById('f-asis-fecha').value;
+      const estado = document.getElementById('f-asis-estado').value;
+      if(!fecha){ toast('Elegí una fecha','red'); return; }
+      const p = getPlanilla(currentPlanillaId);
+      const list = (p.asistencia||[]).filter(a=>a.fecha!==fecha);
+      list.push({fecha, estado});
+      p.asistencia = list;
+      render();
+      autosavePlanilla({ asistencia: list });
+    }
+    else if(action==='del-asistencia'){
+      const fecha = t.getAttribute('data-fecha');
+      const p = getPlanilla(currentPlanillaId);
+      p.asistencia = (p.asistencia||[]).filter(a=>a.fecha!==fecha);
+      render();
+      autosavePlanilla({ asistencia: p.asistencia });
+    }
     else if(action==='doc-tab'){ ui.docTab = t.getAttribute('data-tab'); render(); }
     else if(action==='delete-documento'){
       const docToDel = (DOCS||[]).find(d=>d.id===id);
@@ -2000,7 +2357,7 @@ function attachGlobalEvents(){
     }
   });
 
-  app.addEventListener('change', (e)=>{
+  app.addEventListener('change', async (e)=>{
     const t = e.target;
     if(t.matches('[data-action="filter-curso"]')){ ui.filters.curso = t.value; ui.page.students=1; render(); }
     else if(t.matches('[data-action="filter-estado"]')){ ui.filters.estado = t.value; ui.page.students=1; render(); }
@@ -2008,6 +2365,18 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="filter-grupo"]')){ ui.filters.grupo = t.value; ui.page.students=1; render(); }
     else if(t.matches('[data-action="filter-rot-seccion"]')){ ui.filters.rotSeccion = t.value; ui.page.rotations=1; render(); }
     else if(t.matches('[data-action="filter-rot-estado"]')){ ui.filters.rotEstado = t.value; ui.page.rotations=1; render(); }
+    else if(t.matches('[data-action="filter-pln-seccion"]')){ ui.plnFilters.sectionId = t.value; await loadPlanillas(); render(); }
+    else if(t.matches('[data-action="filter-pln-alumno"]')){ ui.plnFilters.studentId = t.value; await loadPlanillas(); render(); }
+    else if(t.matches('[data-action="filter-pln-profesor"]')){ ui.plnFilters.teacherId = t.value; await loadPlanillas(); render(); }
+    else if(t.matches('[data-action="filter-pln-desde"]')){ ui.plnFilters.desde = t.value; await loadPlanillas(); render(); }
+    else if(t.matches('[data-action="filter-pln-hasta"]')){ ui.plnFilters.hasta = t.value; await loadPlanillas(); render(); }
+    else if(t.classList && t.classList.contains('pln-desempeno')){
+      const critId = t.getAttribute('data-criterio'); const val = t.value;
+      const p = getPlanilla(currentPlanillaId);
+      p.desempeno = p.desempeno || {};
+      if(val) p.desempeno[critId] = val; else delete p.desempeno[critId];
+      autosavePlanilla({ desempeno: p.desempeno });
+    }
     else if(t.matches('[data-action="pendiente-estado"]')){
       const id = t.getAttribute('data-id'); const estado = t.value;
       apiFetch('PUT', '/api/pendientes/'+id, { estado }).then(async ()=>{ await loadDB(); render(); toast('Estado actualizado'); }).catch(e=> toast(e.message||'No se pudo actualizar', 'red'));
@@ -2181,6 +2550,28 @@ async function submitModal(action, type, id){
       if(!studentId || !sectionId || !motivo){ toast('Completá alumno, sección y motivo','red'); return; }
       await apiFetch('POST', '/api/pendientes', { studentId, sectionId, semana: semana?Number(semana):null, motivo, contenido });
       await loadDB(); ui.modal=null; render(); toast('Registro creado');
+    }
+    else if(type==='planilla-form'){
+      const studentId = val('f-pln-alumno'); const sectionId = val('f-pln-seccion');
+      const grupo = val('f-pln-grupo'); const anio = val('f-pln-anio'); const fecha = val('f-pln-fecha');
+      if(!studentId || !sectionId){ toast('Elegí alumno y sección','red'); return; }
+      const result = await apiFetch('POST', '/api/planillas', { studentId, sectionId, grupo, anio: Number(anio)||undefined, fecha });
+      ui.modal=null;
+      if(!CRITERIOS) await loadCriterios();
+      currentPlanillaId = result.id;
+      if(!PLANILLAS) PLANILLAS = [];
+      PLANILLAS.unshift(result);
+      planillaViewMode = 'form';
+      ui.view = 'planilla-detalle';
+      render();
+      toast('Planilla creada');
+    }
+    else if(type==='criterio-form'){
+      const nombre = val('f-criterio-nombre');
+      if(!nombre){ toast('Ponele un nombre al criterio','red'); return; }
+      if(id) await apiFetch('PUT', '/api/criterios-desempeno/'+id, { nombre });
+      else await apiFetch('POST', '/api/criterios-desempeno', { nombre });
+      await loadCriterios(); ui.modal=null; render(); toast(id? 'Criterio actualizado':'Criterio creado');
     }
     else if(type==='quick-week-form'){
       const r = DB.rotations.find(x=>x.id===id);
