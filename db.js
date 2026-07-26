@@ -67,7 +67,7 @@ async function generateRotationsFor(student) {
       startDate: start, endDate: end, teacherId: section.teacherId || null,
       status: 'pendiente', plan: '', actividades: '', observaciones: '',
       informesSemanales: [], informeFinal: '', calificacion: null, comentarios: '',
-      attachmentName: null, attachmentUrl: null
+      attachmentName: null, attachmentUrl: null, respuestasAlumno: [], empresa: ''
     });
   });
   const batch = db.batch();
@@ -87,6 +87,19 @@ async function migrateSectionsWeeksField() {
     }
   }
   if (changed) await recomputeTotalWeeks();
+
+  const cfgSnap = await db.collection('config').doc('main').get();
+  if (cfgSnap.exists && cfgSnap.data().notaAprobacion == null) {
+    await db.collection('config').doc('main').update({ notaAprobacion: 6 });
+  }
+
+  const existingCriterios = await db.collection('criteriosDesempeno').get();
+  if (existingCriterios.empty) {
+    const criteriosDefault = ['Puntualidad', 'Responsabilidad', 'Trabajo en equipo', 'Iniciativa', 'Calidad del trabajo', 'Comunicación', 'Adaptación al entorno laboral'];
+    const critBatch = db.batch();
+    criteriosDefault.forEach((nombre, idx) => critBatch.set(db.collection('criteriosDesempeno').doc(uid('crit')), { nombre, orden: idx + 1 }));
+    await critBatch.commit();
+  }
 }
 
 async function ensureSeed() {
@@ -120,6 +133,7 @@ async function ensureSeed() {
 
   const cfg = {
     totalWeeks: 20,
+    notaAprobacion: 6,
     lineamientos: 'El proyecto FAT (Formación en Ambiente de Trabajo) tiene como objetivo que el estudiante transite experiencias reales de trabajo, rotando por las distintas secciones de la institución asociada, desarrollando competencias técnicas y actitudinales.'
   };
   await db.collection('config').doc('main').set(cfg);
@@ -149,6 +163,11 @@ async function ensureSeed() {
     await db.collection('students').doc(id).set(data);
     await generateRotationsFor(s);
   }
+
+  const criteriosDefault = ['Puntualidad', 'Responsabilidad', 'Trabajo en equipo', 'Iniciativa', 'Calidad del trabajo', 'Comunicación', 'Adaptación al entorno laboral'];
+  const critBatch = db.batch();
+  criteriosDefault.forEach((nombre, idx) => critBatch.set(db.collection('criteriosDesempeno').doc(uid('crit')), { nombre, orden: idx + 1 }));
+  await critBatch.commit();
 
   await logActivity('Se inicializó el sistema FAT Manager con datos de demostración.');
   console.log('[db] Listo. Base de datos Firestore sembrada con datos de ejemplo.');
