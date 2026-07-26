@@ -473,7 +473,7 @@ app.put('/api/rotations/:id', auth, h(async (req, res) => {
 app.put('/api/rotations/:id/schedule', auth, requireRole('admin'), h(async (req, res) => {
   const r = await docData('rotations', req.params.id);
   if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
-  const { sectionId, teacherId, startDate, endDate } = req.body || {};
+  const { sectionId, teacherId, startDate, endDate, empresa, observaciones } = req.body || {};
   const update = {};
   if (sectionId !== undefined) {
     const newSection = await docData('sections', sectionId);
@@ -485,11 +485,45 @@ app.put('/api/rotations/:id/schedule', auth, requireRole('admin'), h(async (req,
   }
   if (startDate !== undefined) update.startDate = startDate;
   if (endDate !== undefined) update.endDate = endDate;
+  if (empresa !== undefined) update.empresa = empresa;
+  if (observaciones !== undefined) update.observaciones = observaciones;
   if (startDate && endDate && startDate > endDate) return res.status(400).json({ error: 'La fecha de inicio no puede ser posterior a la de fin' });
   if (!Object.keys(update).length) return res.status(400).json({ error: 'No se envió ningún cambio' });
   await db.collection('rotations').doc(req.params.id).update(update);
   const student = await docData('students', r.studentId);
   await logActivity(`Se ajustó el cronograma de la rotación de ${student.nombre} ${student.apellido}.`);
+  res.json({ ok: true });
+}));
+
+app.post('/api/rotations', auth, requireRole('admin'), h(async (req, res) => {
+  const { studentId, sectionId, startDate, endDate, teacherId, empresa, observaciones } = req.body || {};
+  if (!studentId || !sectionId || !startDate || !endDate) return res.status(400).json({ error: 'Faltan alumno, sección o fechas' });
+  if (startDate > endDate) return res.status(400).json({ error: 'La fecha de inicio no puede ser posterior a la de fin' });
+  const student = await docData('students', studentId);
+  if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
+  const section = await docData('sections', sectionId);
+  if (!section) return res.status(400).json({ error: 'La sección elegida no existe' });
+  const existing = await whereEquals('rotations', 'studentId', studentId);
+  const maxOrden = existing.reduce((m, r) => Math.max(m, r.orden || 0), 0);
+  const id = uid('rot');
+  const record = {
+    studentId, sectionId, orden: maxOrden + 1, startDate, endDate,
+    teacherId: teacherId !== undefined ? teacherId : (section.teacherId || null),
+    status: 'pendiente', plan: '', actividades: '', observaciones: observaciones || '',
+    empresa: empresa || '', informesSemanales: [], informeFinal: '', calificacion: null,
+    comentarios: '', attachmentName: null, attachmentUrl: null, respuestasAlumno: []
+  };
+  await db.collection('rotations').doc(id).set(record);
+  await logActivity(`Se agregó una rotación manual para ${student.nombre} ${student.apellido} en ${section.nombre}.`);
+  res.status(201).json({ id, ...record });
+}));
+
+app.delete('/api/rotations/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const r = await docData('rotations', req.params.id);
+  if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
+  const student = await docData('students', r.studentId);
+  await db.collection('rotations').doc(req.params.id).delete();
+  await logActivity(`Se eliminó una rotación de ${student ? student.nombre + ' ' + student.apellido : 'un alumno'} del cronograma.`);
   res.json({ ok: true });
 }));
 
