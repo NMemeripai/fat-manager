@@ -91,7 +91,78 @@ app.post('/api/upload', auth, upload.single('file'), h(async (req, res) => {
   res.status(201).json({ url: result.secure_url, name: req.file.originalname });
 }));
 
-/* ---------------------------- full state snapshot ---------------------------- */
+/* ---------------------------- Centro de Documentos ---------------------------- */
+const ALLOWED_DOC_EXT = ['.pdf', '.doc', '.docx'];
+function extOf(filename) {
+  const i = filename.lastIndexOf('.');
+  return i >= 0 ? filename.slice(i).toLowerCase() : '';
+}
+
+app.post('/api/documentos', auth, upload.single('file'), h(async (req, res) => {
+  if (!['admin', 'seccion', 'alumno'].includes(req.user.role)) return res.status(403).json({ error: 'No tenés permiso para subir documentos' });
+  if (!req.file) return res.status(400).json({ error: 'No se envió ningún archivo' });
+  const ext = extOf(req.file.originalname);
+  if (!ALLOWED_DOC_EXT.includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Solo se aceptan .pdf, .doc y .docx' });
+  if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
+
+  let tipo, studentId = null, curso = null;
+  if (req.user.role === 'alumno') {
+    tipo = 'alumno';
+    studentId = req.user.studentId;
+    const st = await docData('students', studentId);
+    curso = st ? (st.curso + ' "' + st.division + '"') : null;
+  } else if (req.user.role === 'seccion') {
+    tipo = 'mep';
+    studentId = req.body.studentId || null;
+  } else {
+    tipo = req.body.tipo === 'alumno' ? 'alumno' : 'mep';
+    studentId = req.body.studentId || null;
+  }
+
+  const result = await new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: 'fat-manager/documentos', resource_type: 'raw', public_id: uid('file') },
+      (err, r) => err ? reject(err) : resolve(r)
+    );
+    stream.end(req.file.buffer);
+  });
+
+  const now = new Date();
+  const id = uid('doc');
+  const docRecord = {
+    tipo, nombre: req.file.originalname, url: result.secure_url,
+    uploadedBy: req.user.sub, uploadedByNombre: req.user.nombre, uploadedByRole: req.user.role,
+    studentId, curso, observaciones: req.body.observaciones || '',
+    fecha: now.toISOString().slice(0, 10), hora: now.toTimeString().slice(0, 5),
+    createdAt: now.toISOString()
+  };
+  await db.collection('documentos').doc(id).set(docRecord);
+  await logActivity(`${req.user.nombre} subió el documento "${req.file.originalname}".`);
+  res.status(201).json({ id, ...docRecord });
+}));
+
+app.get('/api/documentos', auth, requireRole('admin'), h(async (req, res) => {
+  const docs = await allDocs('documentos');
+  docs.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  res.json({ documentos: docs });
+}));
+
+app.delete('/api/documentos/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const d = await docData('documentos', req.params.id);
+  if (!d) return res.status(404).json({ error: 'Documento no encontrado' });
+  await db.collection('documentos').doc(req.params.id).delete();
+  await logActivity(`Se eliminó el documento "${d.nombre}".`);
+  res.json({ ok: true });
+}));
+
+app.get('/api/mis-documentos', auth, h(async (req, res) => {
+  if (!['seccion', 'alumno'].includes(req.user.role)) return res.status(403).json({ error: 'No tenés documentos propios en este sistema' });
+  const all = await allDocs('documentos');
+  const mine = all.filter(d => d.uploadedBy === req.user.sub).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  res.json({ documentos: mine });
+}));
+
+
 app.get('/api/state', auth, h(async (req, res) => {
   if (req.user.role === 'alumno') return res.status(403).json({ error: 'Los alumnos no tienen acceso a este recurso' });
   const cfgSnap = await db.collection('config').doc('main').get();
