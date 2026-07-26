@@ -393,6 +393,7 @@ let DOCS = null; // documentos del Centro de Documentos (solo se cargan cuando e
 let MY_DOCS = null; // documentos propios (profesor de sección o alumno)
 let PLANILLAS = null; // listado de Planillas Digitales FAT (admin: todas; profesor: propias)
 let CRITERIOS = null; // criterios de desempeño configurables
+let USUARIOS = null; // cuentas VIEW ADMIN (Gestión de Usuarios)
 let currentPlanillaId = null; // planilla abierta actualmente (vista detalle)
 let planillaViewMode = 'documento'; // 'documento' (estilo Word, solo lectura) | 'form' (edición)
 let session = null;
@@ -517,6 +518,10 @@ async function loadPlanillas(){
 async function loadCriterios(){
   const data = await apiFetch('GET', '/api/criterios-desempeno');
   CRITERIOS = data.criterios;
+}
+async function loadUsuarios(){
+  const data = await apiFetch('GET', '/api/usuarios');
+  USUARIOS = data.usuarios;
 }
 async function loadPlanillaDetalle(id){
   currentPlanillaId = id;
@@ -860,10 +865,11 @@ function renderShell(){
         ${navItem('guidelines','book','Lineamientos')}
         ${navItem('reports','file','Informes')}
         <div class="nav-section-label">Sistema</div>
-        ${navItem('cronograma','calendar','Cronograma de Rotaciones', ['admin','coordinador'])}
-        ${navItem('planillas','file','Planillas Digitales FAT', ['admin','seccion'])}
-        ${navItem('documentos','file','Centro de Documentos', ['admin'])}
-        ${navItem('config','sliders','Configuración', ['admin'])}
+        ${navItem('cronograma','calendar','Cronograma de Rotaciones', ['admin','coordinador','viewadmin'])}
+        ${navItem('planillas','file','Planillas Digitales FAT', ['admin','seccion','viewadmin'])}
+        ${navItem('documentos','file','Centro de Documentos', ['admin','viewadmin'])}
+        ${navItem('usuarios','users','Gestión de Usuarios', ['admin'])}
+        ${navItem('config','sliders','Configuración', ['admin','viewadmin'])}
       </div>
       <div class="sidebar-foot">
         <div class="user-chip" data-action="toggle-user-menu">
@@ -900,7 +906,7 @@ function renderShell(){
 }
 
 function roleLabel(role){
-  return {admin:'Administrador', coordinador:'Coordinador FAT', seccion:'Profesor de sección'}[role] || role;
+  return {admin:'Administrador', coordinador:'Coordinador FAT', seccion:'Profesor de sección', viewadmin:'VIEW ADMIN · Solo lectura'}[role] || role;
 }
 
 function renderNotifPanel(notifs){
@@ -930,11 +936,12 @@ function renderView(){
     case 'pendientes': return renderPendientes();
     case 'guidelines': return renderGuidelines();
     case 'reports': return renderReports();
-    case 'cronograma': return (session.role==='admin'||session.role==='coordinador') ? renderCronograma() : renderDashboard();
-    case 'planillas': return (session.role==='admin'||session.role==='seccion') ? renderPlanillas() : renderDashboard();
+    case 'cronograma': return (session.role==='admin'||session.role==='coordinador'||session.role==='viewadmin') ? renderCronograma() : renderDashboard();
+    case 'planillas': return (session.role==='admin'||session.role==='seccion'||session.role==='viewadmin') ? renderPlanillas() : renderDashboard();
     case 'planilla-detalle': return renderPlanillaDetalle();
-    case 'documentos': return session.role==='admin' ? renderDocumentos() : renderDashboard();
-    case 'config': return session.role==='admin' ? renderConfig() : renderDashboard();
+    case 'documentos': return (session.role==='admin'||session.role==='viewadmin') ? renderDocumentos() : renderDashboard();
+    case 'usuarios': return session.role==='admin' ? renderGestionUsuarios() : renderDashboard();
+    case 'config': return (session.role==='admin'||session.role==='viewadmin') ? renderConfig() : renderDashboard();
     default: return renderDashboard();
   }
 }
@@ -1544,9 +1551,10 @@ function docIcon(nombre){
   return ext==='pdf' ? 'file' : 'paperclip';
 }
 /* ---------------------------- PLANILLAS DIGITALES FAT (admin + profesor de sección) ---------------------------- */
-const DESEMPENO_ESCALA = [
-  {v:'E', l:'Excelente'}, {v:'MB', l:'Muy Bueno'}, {v:'B', l:'Bueno'}, {v:'R', l:'Regular'}, {v:'M', l:'Malo'}
+const CALIFICACION_ESCALA = [
+  {v:'E', l:'Excelente'}, {v:'MB', l:'Muy Bueno'}, {v:'B', l:'Bueno'}, {v:'R', l:'Regular'}, {v:'M', l:'Mal Logrado'}
 ];
+const CALIFICACION_LABELS = Object.fromEntries(CALIFICACION_ESCALA.map(e=>[e.v, e.v+' — '+e.l]));
 const ASISTENCIA_ESTADOS = [
   {v:'presente', l:'Presente', c:'green'}, {v:'ausente', l:'Ausente', c:'red'},
   {v:'justificado', l:'Justificado', c:'amber'}, {v:'tarde', l:'Tarde', c:'accent'}
@@ -1663,11 +1671,12 @@ function cronogramaEditFormHtml(rot){
 function renderPlanillas(){
   if(!PLANILLAS) return `<div class="page-head"><div><h1 class="page-title">Planillas Digitales FAT</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
   const isAdmin = session.role==='admin';
+  const isViewAdmin = session.role==='viewadmin';
   const f = ui.plnFilters;
   return `
   <div class="page-head">
     <div><h1 class="page-title">Planillas Digitales FAT</h1><p class="page-sub">${PLANILLAS.length} planilla${PLANILLAS.length===1?'':'s'} · exclusivo Profesores MEP y Administración</p></div>
-    <button class="btn btn-primary" data-action="new-planilla">${icon('plus','icon-sm')} Nueva planilla</button>
+    ${!isViewAdmin? `<button class="btn btn-primary" data-action="new-planilla">${icon('plus','icon-sm')} Nueva planilla</button>`:''}
   </div>
   ${isAdmin? `<div class="filters-row">
     <select class="select" data-action="filter-pln-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
@@ -1764,11 +1773,10 @@ function renderPlanillaDocumento(p){
     <h3 class="planilla-doc-section-title">Actividades realizadas</h3>
     <p class="planilla-doc-text">${esc(p.actividades)||'—'}</p>
 
-    <h3 class="planilla-doc-section-title">Desempeño</h3>
-    ${CRITERIOS && CRITERIOS.length? `<table class="planilla-doc-table">
-      <tr><th>Criterio</th><th>Calificación</th></tr>
-      ${CRITERIOS.map(c=>`<tr><td>${esc(c.nombre)}</td><td>${(p.desempeno&&p.desempeno[c.id])? esc(p.desempeno[c.id]) : '—'}</td></tr>`).join('')}
-    </table>`:''}
+    <h3 class="planilla-doc-section-title">Calificación</h3>
+    <table class="planilla-doc-table">
+      <tr><th>Calificación final</th><td>${p.calificacion? esc(CALIFICACION_LABELS[p.calificacion]||p.calificacion) : '—'}</td></tr>
+    </table>
 
     <h3 class="planilla-doc-section-title">Observaciones</h3>
     <p class="planilla-doc-text">${esc(p.observaciones)||'—'}</p>
@@ -1798,8 +1806,9 @@ function renderPlanillaForm(p){
   </div>
 
   <div class="section-card">
-    <h3>Asistencia <button class="btn btn-sm" type="button" data-action="add-asistencia">${icon('plus','icon-sm')} Agregar día</button></h3>
-    <div class="field-row" style="align-items:flex-end;">
+    <h3>Asistencia</h3>
+    ${(p.asistencia||[]).length? `<ul class="mono-list">${p.asistencia.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).map((a,i)=>`<li><span>${fmtDate(a.fecha)} — ${asistenciaBadge(a.estado)}</span><span class="tag-remove" data-action="del-asistencia" data-fecha="${a.fecha}">${icon('x','icon-sm')}</span></li>`).join('')}</ul>`:`<p class="cell-muted" style="font-size:12.5px; margin-bottom:10px;">Sin días cargados todavía.</p>`}
+    <div class="field-row" style="align-items:flex-end; margin-top:12px;">
       <div class="field"><label>Fecha</label><input class="input" type="date" id="f-asis-fecha" value="${todayISO()}"></div>
       <div class="field"><label>Estado</label>
         <select class="select" id="f-asis-estado" style="width:100%;">
@@ -1807,7 +1816,7 @@ function renderPlanillaForm(p){
         </select>
       </div>
     </div>
-    ${(p.asistencia||[]).length? `<ul class="mono-list">${p.asistencia.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).map((a,i)=>`<li><span>${fmtDate(a.fecha)} — ${asistenciaBadge(a.estado)}</span><span class="tag-remove" data-action="del-asistencia" data-fecha="${a.fecha}">${icon('x','icon-sm')}</span></li>`).join('')}</ul>`:`<p class="cell-muted" style="font-size:12.5px;">Sin días cargados.</p>`}
+    <button class="btn btn-sm btn-primary" type="button" data-action="add-asistencia" style="width:100%; justify-content:center;">${icon('plus','icon-sm')} Agregar día</button>
   </div>
 
   <div class="section-card">
@@ -1821,21 +1830,63 @@ function renderPlanillaForm(p){
   </div>
 
   <div class="section-card">
-    <h3>Desempeño</h3>
-    ${CRITERIOS && CRITERIOS.length? CRITERIOS.map(c=>`
-      <div class="field-row" style="align-items:center; margin-bottom:8px;">
-        <div style="font-size:13.5px; font-weight:600;">${esc(c.nombre)}</div>
-        <select class="select pln-desempeno" data-criterio="${c.id}" style="width:100%;">
-          <option value="">Sin calificar</option>
-          ${DESEMPENO_ESCALA.map(e=>`<option value="${e.v}" ${(p.desempeno&&p.desempeno[c.id]===e.v)?'selected':''}>${e.v} — ${e.l}</option>`).join('')}
-        </select>
-      </div>`).join('') : `<p class="cell-muted">No hay criterios de desempeño configurados. El administrador puede agregarlos en Configuración.</p>`}
+    <h3>Calificación</h3>
+    <table class="planilla-doc-table" style="margin-bottom:0;">
+      <tr>
+        <th style="width:auto;">Calificación final</th>
+        <td>
+          <select class="select pln-calificacion" style="width:100%; max-width:280px;">
+            <option value="">Sin calificar</option>
+            ${CALIFICACION_ESCALA.map(e=>`<option value="${e.v}" ${p.calificacion===e.v?'selected':''}>${e.v} — ${e.l}</option>`).join('')}
+          </select>
+        </td>
+      </tr>
+    </table>
   </div>
 
   <div class="section-card">
     <h3>Observaciones</h3>
     <textarea class="input pln-autosave" data-field="observaciones" style="min-height:100px;" placeholder="Observaciones libres">${esc(p.observaciones||'')}</textarea>
   </div>
+  `;
+}
+
+/* ---------------------------- GESTIÓN DE USUARIOS (admin: administra cuentas VIEW ADMIN) ---------------------------- */
+function renderGestionUsuarios(){
+  if(!USUARIOS) return `<div class="page-head"><div><h1 class="page-title">Gestión de Usuarios</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Gestión de Usuarios</h1><p class="page-sub">Cuentas VIEW ADMIN — acceso de solo lectura a todo el sistema</p></div>
+    <button class="btn btn-primary" data-action="new-usuario">${icon('plus','icon-sm')} Nuevo VIEW ADMIN</button>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Nombre</th><th>Usuario</th><th>Estado</th><th></th></tr></thead>
+    <tbody>
+    ${USUARIOS.length? USUARIOS.map(u=>`
+      <tr>
+        <td class="cell-strong">${esc(u.nombre)}</td>
+        <td class="cell-muted">${esc(u.username)}</td>
+        <td>${u.active? '<span class="badge badge-green">Activo</span>' : '<span class="badge badge-neutral">Desactivado</span>'}</td>
+        <td style="white-space:nowrap; display:flex; gap:6px;">
+          <button class="btn btn-sm" data-action="edit-usuario" data-id="${u.id}">${icon('edit','icon-sm')} Editar</button>
+          <button class="btn btn-sm" data-action="reset-usuario-password" data-id="${u.id}">${icon('sliders','icon-sm')} Restablecer contraseña</button>
+          <button class="btn btn-sm" data-action="toggle-usuario-active" data-id="${u.id}" data-active="${u.active?'1':'0'}">${u.active? 'Desactivar':'Activar'}</button>
+          <button class="btn btn-sm btn-danger" data-action="delete-usuario" data-id="${u.id}">${icon('trash','icon-sm')}</button>
+        </td>
+      </tr>`).join('') : `<tr><td colspan="4"><div class="empty-state"><div class="em-icon">${icon('users')}</div><div class="em-title">Sin cuentas VIEW ADMIN todavía</div></div></td></tr>`}
+    </tbody>
+  </table>
+  </div>
+  <p class="help-text" style="margin-top:10px;">Una cuenta VIEW ADMIN puede ver todo el sistema (alumnos, profesores, cronograma, planillas, informes, documentos, configuración) pero no puede crear, editar ni eliminar nada. Los botones de acción no se muestran para este rol.</p>
+  `;
+}
+function usuarioFormHtml(u){
+  u = u||{};
+  return `
+  <div class="field"><label>Nombre completo</label><input class="input" id="f-usu-nombre" value="${esc(u.nombre||'')}"></div>
+  <div class="field"><label>Usuario</label><input class="input" id="f-usu-username" value="${esc(u.username||'')}" placeholder="ej. lectura.direccion"></div>
+  <div class="field"><label>Contraseña ${u.id?'(dejar en blanco para no cambiarla)':''}</label><input class="input" type="password" id="f-usu-password" placeholder="${u.id?'••••••••':'Contraseña de acceso'}"></div>
   `;
 }
 
@@ -1849,11 +1900,12 @@ function renderDocumentos(){
   list = list.slice().sort((a,b)=> (b.createdAt||'').localeCompare(a.createdAt||''));
   const mepCount = DOCS.filter(d=>d.tipo==='mep').length;
   const alCount = DOCS.filter(d=>d.tipo==='alumno').length;
+  const isViewAdmin = session.role==='viewadmin';
 
   return `
   <div class="page-head">
     <div><h1 class="page-title">Centro de Documentos</h1><p class="page-sub">${DOCS.length} documento${DOCS.length===1?'':'s'} en total</p></div>
-    <button class="btn btn-primary" data-action="new-documento">${icon('upload','icon-sm')} Subir documento</button>
+    ${!isViewAdmin? `<button class="btn btn-primary" data-action="new-documento">${icon('upload','icon-sm')} Subir documento</button>`:''}
   </div>
   <div class="tabs">
     <div class="tab ${ui.docTab==='mep'?'active':''}" data-action="doc-tab" data-tab="mep">${icon('file','icon-sm')} Documentos MEP (${mepCount})</div>
@@ -1876,7 +1928,7 @@ function renderDocumentos(){
         <td class="cell-muted">${esc(d.observaciones||'—')}</td>
         <td style="white-space:nowrap;">
           <button class="btn btn-sm" data-action="download-documento" data-id="${d.id}" data-name="${esc(d.nombre)}">${icon('download','icon-sm')} Ver/Descargar</button>
-          <button class="btn btn-sm btn-danger" data-action="delete-documento" data-id="${d.id}">${icon('trash','icon-sm')}</button>
+          ${!isViewAdmin? `<button class="btn btn-sm btn-danger" data-action="delete-documento" data-id="${d.id}">${icon('trash','icon-sm')}</button>`:''}
         </td>
       </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin documentos ${ui.docTab==='mep'?'de profesores':'de alumnos'}</div></div></td></tr>`}
     </tbody>
@@ -1919,8 +1971,9 @@ function documentoFormHtml(){
 function renderConfig(){
   const c = DB.config;
   const groups = DB.groups || [];
+  const isViewAdmin = session.role==='viewadmin';
   return `
-  <div class="page-head"><div><h1 class="page-title">Configuración</h1><p class="page-sub">Parámetros generales del FAT y gestión de personal</p></div></div>
+  <div class="page-head"><div><h1 class="page-title">Configuración</h1><p class="page-sub">Parámetros generales del FAT y gestión de personal${isViewAdmin? ' · <span class="badge badge-neutral">Solo lectura</span>':''}</p></div></div>
 
   <div class="section-card">
     <h3>Duración de la pasantía</h3>
@@ -1933,37 +1986,27 @@ function renderConfig(){
   <div class="section-card">
     <h3>Aprobación</h3>
     <div class="field-row">
-      <div class="field"><label>Nota mínima de aprobación</label><input class="input" type="number" min="1" max="10" id="cfg-nota-aprobacion" value="${c.notaAprobacion||6}"></div>
+      <div class="field"><label>Nota mínima de aprobación</label><input class="input" type="number" min="1" max="10" id="cfg-nota-aprobacion" value="${c.notaAprobacion||6}" ${isViewAdmin?'disabled':''}></div>
     </div>
-    <button class="btn btn-primary btn-sm" data-action="save-nota-aprobacion">Guardar</button>
+    ${!isViewAdmin? `<button class="btn btn-primary btn-sm" data-action="save-nota-aprobacion">Guardar</button>`:''}
     <p class="help-text">Se usa para calcular el estado Aprobado/Desaprobado en el Promedio Final de cada alumno.</p>
   </div>
 
   <div class="section-card">
-    <h3>Grupos <button class="btn btn-sm" data-action="new-group">${icon('plus','icon-sm')} Nuevo grupo</button></h3>
+    <h3>Grupos ${!isViewAdmin? `<button class="btn btn-sm" data-action="new-group">${icon('plus','icon-sm')} Nuevo grupo</button>`:''}</h3>
     ${groups.length? `<ul class="mono-list">${groups.map(g=>{
       const count = DB.students.filter(s=>s.groupId===g.id).length;
       return `<li><span>${esc(g.nombre)} <span class="cell-muted">· ${count} alumno${count===1?'':'s'}</span></span>
-        <span style="display:flex; gap:10px; align-items:center;">
+        ${!isViewAdmin? `<span style="display:flex; gap:10px; align-items:center;">
           <span class="tag-remove" data-action="edit-group" data-id="${g.id}">${icon('edit','icon-sm')}</span>
           <span class="tag-remove" data-action="delete-group" data-id="${g.id}">${icon('x','icon-sm')}</span>
-        </span></li>`;
+        </span>`:''}</li>`;
     }).join('')}</ul>` : `<div class="empty-state">Sin grupos creados todavía</div>`}
     <p class="help-text">Los grupos son independientes de las secciones: sirven para organizar alumnos (ej. "Grupo A", "Turno mañana"). Se asignan desde la ficha de cada alumno.</p>
   </div>
 
   <div class="section-card">
-    <h3>Criterios de desempeño (Planilla Digital FAT) <button class="btn btn-sm" data-action="new-criterio">${icon('plus','icon-sm')} Nuevo criterio</button></h3>
-    ${CRITERIOS===null? `<p class="cell-muted" style="font-size:12.5px;">Cargando…</p>` : (CRITERIOS.length? `<ul class="mono-list">${CRITERIOS.map(c=>`<li><span>${esc(c.nombre)}</span>
-        <span style="display:flex; gap:10px; align-items:center;">
-          <span class="tag-remove" data-action="edit-criterio" data-id="${c.id}">${icon('edit','icon-sm')}</span>
-          <span class="tag-remove" data-action="delete-criterio" data-id="${c.id}">${icon('x','icon-sm')}</span>
-        </span></li>`).join('')}</ul>` : `<div class="empty-state">Sin criterios cargados todavía</div>`)}
-    <p class="help-text">Se califican con la escala E (Excelente), MB (Muy Bueno), B (Bueno), R (Regular), M (Malo) al completar cada Planilla Digital FAT.</p>
-  </div>
-
-  <div class="section-card">
-    <h3>Profesores <button class="btn btn-sm" data-action="new-teacher">${icon('plus','icon-sm')} Nuevo profesor</button></h3>
+    <h3>Profesores ${!isViewAdmin? `<button class="btn btn-sm" data-action="new-teacher">${icon('plus','icon-sm')} Nuevo profesor</button>`:''}</h3>
     <div class="table-wrap" style="box-shadow:none;">
     <table>
       <thead><tr><th>Nombre</th><th>Rol</th><th>Sección</th><th>Usuario</th><th></th></tr></thead>
@@ -1976,7 +2019,7 @@ function renderConfig(){
           <td>${t.rol==='coordinador'?'Coordinador FAT':'Profesor de sección'}</td>
           <td>${sec? esc(sec.nombre):'—'}</td>
           <td class="cell-muted">${u? esc(u.username):'—'}</td>
-          <td><button class="btn btn-sm" data-action="edit-teacher" data-id="${t.id}">${icon('edit','icon-sm')}</button> <button class="btn btn-sm btn-danger" data-action="delete-teacher" data-id="${t.id}">Eliminar</button></td>
+          <td>${!isViewAdmin? `<button class="btn btn-sm" data-action="edit-teacher" data-id="${t.id}">${icon('edit','icon-sm')}</button> <button class="btn btn-sm btn-danger" data-action="delete-teacher" data-id="${t.id}">Eliminar</button>`:''}</td>
         </tr>`;
       }).join('')}
       </tbody>
@@ -2014,6 +2057,7 @@ function renderModal(){
   else if(m.type==='planilla-form'){ title='Nueva Planilla Digital FAT'; body = planillaFormHtml(); }
   else if(m.type==='criterio-form'){ title = m.data? 'Editar criterio':'Nuevo criterio'; body = `<div class="field"><label>Nombre del criterio</label><input class="input" id="f-criterio-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Puntualidad"></div>`; }
   else if(m.type==='cronograma-edit-form'){ title='Editar rotación en el cronograma'; body = cronogramaEditFormHtml(m.data); }
+  else if(m.type==='usuario-form'){ title = m.data? 'Editar VIEW ADMIN':'Nuevo VIEW ADMIN'; body = usuarioFormHtml(m.data); }
 
   return `
   <div class="modal-overlay" data-action="close-modal-bg">
@@ -2306,6 +2350,7 @@ function attachGlobalEvents(){
       if(ui.view==='documentos' && !DOCS){ try{ await loadDocumentos(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los documentos','red'); } }
       if(ui.view==='planillas'){ try{ await Promise.all([loadPlanillas(), CRITERIOS?Promise.resolve():loadCriterios()]); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas','red'); } }
       if(ui.view==='config' && !CRITERIOS && session.role==='admin'){ try{ await loadCriterios(); render(); }catch(e){ /* no crítico */ } }
+      if(ui.view==='usuarios'){ try{ await loadUsuarios(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los usuarios','red'); } }
     }
     else if(action==='toggle-theme'){ ui.theme = ui.theme==='light'?'dark':'light'; render(); }
     else if(action==='toggle-notif'){ ui.notifOpen = !ui.notifOpen; render(); }
@@ -2391,6 +2436,32 @@ function attachGlobalEvents(){
     }
     else if(action==='new-criterio'){ ui.modal={type:'criterio-form', data:null}; render(); }
     else if(action==='cron-edit'){ ui.modal={type:'cronograma-edit-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
+    else if(action==='new-usuario'){ ui.modal={type:'usuario-form', data:null}; render(); }
+    else if(action==='edit-usuario'){ ui.modal={type:'usuario-form', data:(USUARIOS||[]).find(u=>u.id===id)}; render(); }
+    else if(action==='reset-usuario-password'){
+      const nueva = prompt('Escribí la nueva contraseña para este usuario:');
+      if(nueva && nueva.trim()){
+        try{ await apiFetch('PUT','/api/usuarios/'+id,{password:nueva.trim()}); toast('Contraseña restablecida'); }
+        catch(e){ toast(e.message||'No se pudo restablecer','red'); }
+      }
+    }
+    else if(action==='toggle-usuario-active'){
+      const isActive = t.getAttribute('data-active')==='1';
+      try{ await apiFetch('PUT','/api/usuarios/'+id,{active:!isActive}); await loadUsuarios(); render(); toast(isActive?'Usuario desactivado':'Usuario activado'); }
+      catch(e){ toast(e.message||'No se pudo actualizar','red'); }
+    }
+    else if(action==='delete-usuario'){
+      const uForDel = (USUARIOS||[]).find(u=>u.id===id);
+      askConfirm({
+        title:'Eliminar usuario VIEW ADMIN',
+        message:'¿Eliminar a '+(uForDel?uForDel.nombre:'este usuario')+'? Esta acción no se puede deshacer.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/usuarios/'+id); await loadUsuarios(); render(); toast('Usuario eliminado'); }
+          catch(e){ toast(e.message||'No se pudo eliminar','red'); }
+        }
+      });
+    }
     else if(action==='edit-criterio'){ ui.modal={type:'criterio-form', data:(CRITERIOS||[]).find(c=>c.id===id)}; render(); }
     else if(action==='delete-criterio'){
       const cForDel = (CRITERIOS||[]).find(c=>c.id===id);
@@ -2539,12 +2610,10 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="cron-filtro-grupo"]')){ ui.cronFiltroGrupo = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-seccion"]')){ ui.cronFiltroSeccion = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-curso"]')){ ui.cronFiltroCurso = t.value; render(); }
-    else if(t.classList && t.classList.contains('pln-desempeno')){
-      const critId = t.getAttribute('data-criterio'); const val = t.value;
+    else if(t.classList && t.classList.contains('pln-calificacion')){
       const p = getPlanilla(currentPlanillaId);
-      p.desempeno = p.desempeno || {};
-      if(val) p.desempeno[critId] = val; else delete p.desempeno[critId];
-      autosavePlanilla({ desempeno: p.desempeno });
+      p.calificacion = t.value || null;
+      autosavePlanilla({ calificacion: p.calificacion });
     }
     else if(t.matches('[data-action="pendiente-estado"]')){
       const id = t.getAttribute('data-id'); const estado = t.value;
@@ -2751,6 +2820,19 @@ async function submitModal(action, type, id){
       await apiFetch('PUT', '/api/rotations/'+id+'/schedule', { sectionId, teacherId, startDate, endDate });
       await apiFetch('PUT', '/api/students/'+rot.studentId+'/group', { groupId });
       await loadDB(); ui.modal=null; render(); toast('Cronograma actualizado');
+    }
+    else if(type==='usuario-form'){
+      const nombre = val('f-usu-nombre'); const username = val('f-usu-username'); const password = val('f-usu-password');
+      if(!nombre || !username){ toast('Completá nombre y usuario','red'); return; }
+      if(id){
+        const payload = { nombre, username };
+        if(password) payload.password = password;
+        await apiFetch('PUT', '/api/usuarios/'+id, payload);
+      } else {
+        if(!password){ toast('La contraseña es obligatoria para un usuario nuevo','red'); return; }
+        await apiFetch('POST', '/api/usuarios', { nombre, username, password });
+      }
+      await loadUsuarios(); ui.modal=null; render(); toast(id? 'Usuario actualizado':'Usuario VIEW ADMIN creado');
     }
     else if(type==='quick-week-form'){
       const r = DB.rotations.find(x=>x.id===id);
