@@ -1409,7 +1409,10 @@ function renderRotations(){
         <td class="cell-muted">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</td>
         <td>${statusBadge(r.status)}</td>
         <td>${rotationAvg(r)!=null? rotationAvg(r).toFixed(1) : '<span class="cell-muted">—</span>'}</td>
-        <td>${isRotationEditableBy(r)? `<button class="btn btn-sm" data-action="edit-rotation" data-id="${r.id}">${icon('edit','icon-sm')} Cargar</button>`:''}</td>
+        <td style="white-space:nowrap; display:flex; gap:6px;">
+          ${isRotationEditableBy(r)? `<button class="btn btn-sm" data-action="edit-rotation" data-id="${r.id}">${icon('edit','icon-sm')} Cargar</button>`:''}
+          ${session.role==='admin'? `<button class="btn btn-sm btn-danger" data-action="delete-rotation" data-id="${r.id}">${icon('trash','icon-sm')}</button>`:''}
+        </td>
       </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('refresh')}</div><div class="em-title">Sin rotaciones</div>Ajustá los filtros seleccionados.</div></td></tr>`}
     </tbody>
   </table>
@@ -1604,8 +1607,20 @@ function renderCronograma(){
   if(ui.cronFiltroCurso) students = students.filter(s=>s.curso===ui.cronFiltroCurso);
   if(ui.cronFiltroSeccion) students = students.filter(s=> rotationsOf(s.id).some(r=>r.sectionId===ui.cronFiltroSeccion));
 
+  const hayFiltrosActivos = !!(ui.cronFiltroGrupo || ui.cronFiltroCurso || ui.cronFiltroSeccion);
   if(!students.length){
-    return `<div class="page-head"><div><h1 class="page-title">Cronograma de Rotaciones</h1></div></div><div class="empty-state"><div class="em-icon">${icon('calendar')}</div><div class="em-title">No hay alumnos para mostrar con estos filtros</div></div>`;
+    const cursosVacio = [...new Set(DB.students.map(s=>s.curso))];
+    return `
+    <div class="page-head">
+      <div><h1 class="page-title">Cronograma de Rotaciones</h1></div>
+      ${hayFiltrosActivos? `<button class="btn btn-primary" data-action="cron-limpiar-filtros">${icon('x','icon-sm')} Limpiar filtros</button>`:''}
+    </div>
+    <div class="filters-row">
+      <select class="select" data-action="cron-filtro-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${ui.cronFiltroGrupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
+      <select class="select" data-action="cron-filtro-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${ui.cronFiltroSeccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+      <select class="select" data-action="cron-filtro-curso"><option value="">Todos los cursos</option>${cursosVacio.map(c=>`<option value="${esc(c)}" ${ui.cronFiltroCurso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
+    </div>
+    <div class="empty-state"><div class="em-icon">${icon('calendar')}</div><div class="em-title">No hay alumnos para mostrar con estos filtros</div>${hayFiltrosActivos? 'Probá elegir otro filtro arriba, o hacé clic en "Limpiar filtros".' : 'Todavía no hay alumnos activos o pausados cargados en el sistema.'}</div>`;
   }
 
   // Las semanas del cronograma arrancan en la duración total configurada del programa
@@ -2032,12 +2047,12 @@ function renderDocumentos(){
 }
 function documentoFormHtml(){
   return `
-  <div class="field"><label>Archivo (.pdf, .doc, .docx)</label>
+  <div class="field"><label>Archivo (.pdf, .doc, .docx, .xls, .xlsx)</label>
     <label class="file-drop" for="f-doc-file" id="f-doc-file-label">
       ${icon('upload')}
       <div id="f-doc-file-text">Hacé clic para seleccionar un archivo</div>
     </label>
-    <input type="file" id="f-doc-file" accept=".pdf,.doc,.docx" style="display:none;">
+    <input type="file" id="f-doc-file" accept=".pdf,.doc,.docx,.xls,.xlsx" style="display:none;">
     <div id="f-doc-progress-wrap" style="display:none; margin-top:10px;">
       <div class="bar-track"><div class="bar-fill" id="f-doc-progress-bar" style="width:0%;"></div></div>
     </div>
@@ -2550,7 +2565,21 @@ function attachGlobalEvents(){
         }
       });
     }
+    else if(action==='delete-rotation'){
+      const r = DB.rotations.find(x=>x.id===id);
+      const nombre = r? studentName(r.studentId) : 'este alumno';
+      askConfirm({
+        title:'Eliminar rotación',
+        message:'¿Está seguro que desea eliminar esta rotación de '+nombre+'? Esta acción no se puede deshacer, y también desaparecerá del Cronograma de Rotaciones.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/rotations/'+id); await loadDB(); render(); toast('Rotación eliminada'); }
+          catch(e){ toast(e.message||'No se pudo eliminar','red'); }
+        }
+      });
+    }
     else if(action==='new-usuario'){ ui.modal={type:'usuario-form', data:null}; render(); }
+    else if(action==='cron-limpiar-filtros'){ ui.cronFiltroGrupo=''; ui.cronFiltroCurso=''; ui.cronFiltroSeccion=''; render(); }
     else if(action==='edit-usuario'){ ui.modal={type:'usuario-form', data:(USUARIOS||[]).find(u=>u.id===id)}; render(); }
     else if(action==='reset-usuario-password'){
       const nueva = prompt('Escribí la nueva contraseña para este usuario:');
@@ -2786,9 +2815,9 @@ async function uploadDocumento(){
   const fileInput = document.getElementById('f-doc-file');
   const file = fileInput.files && fileInput.files[0];
   if(!file){ toast('Elegí un archivo para subir','red'); return; }
-  const allowedExt = ['.pdf','.doc','.docx'];
+  const allowedExt = ['.pdf','.doc','.docx','.xls','.xlsx'];
   const ext = '.'+(file.name.split('.').pop()||'').toLowerCase();
-  if(!allowedExt.includes(ext)){ toast('Formato no permitido. Solo .pdf, .doc o .docx','red'); return; }
+  if(!allowedExt.includes(ext)){ toast('Formato no permitido. Solo .pdf, .doc, .docx, .xls o .xlsx','red'); return; }
 
   const fd = new FormData();
   fd.append('file', file);
