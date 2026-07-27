@@ -363,7 +363,12 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 .cron-cell-empty{cursor:default;}
 .cron-cell-addable{cursor:pointer; color:var(--text-3); font-size:15px; font-weight:700; text-align:center; transition:background .12s var(--ease), color .12s var(--ease);}
 .cron-cell-addable:hover{background:var(--accent-softer) !important; color:var(--accent);}
-.cron-cell-bar{height:100%; border-radius:5px; min-height:22px;}
+.cron-cell-bar{height:100%; border-radius:5px; min-height:22px; position:relative;}
+.cron-attend-dot{position:absolute; top:1px; right:1px; width:11px; height:11px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 1.5px var(--surface);}
+.cron-attend-dot .icon{width:8px; height:8px; stroke-width:3.5;}
+.cron-attend-ok{background:var(--green); color:#fff;}
+.cron-attend-bad{background:var(--red); color:#fff;}
+.cron-attend-warn{background:var(--red); width:7px; height:7px; top:2px; right:2px;}
 </style>
 </head>
 <body>
@@ -1450,7 +1455,7 @@ function renderGrades(){
 
 /* ---------------------------- CONTENIDOS PENDIENTES ---------------------------- */
 function pendienteEstadoBadge(estado){
-  const map = {pendiente:['red','Pendiente'], en_recuperacion:['amber','En recuperación'], completado:['green','Completado']};
+  const map = {pendiente:['red','Pendiente'], en_recuperacion:['amber','En proceso'], completado:['green','Recuperado']};
   const [c,l] = map[estado]||['neutral',estado];
   return `<span class="badge badge-${c}"><span class="badge-dot-ico"></span>${l}</span>`;
 }
@@ -1467,7 +1472,7 @@ function renderPendientes(){
   </div>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>Alumno</th><th>Sección</th><th>Profesor</th><th>Semana</th><th>Motivo</th><th>Contenido</th><th>Estado</th><th></th></tr></thead>
+    <thead><tr><th>Alumno</th><th>Sección</th><th>Profesor MEP</th><th>Semana</th><th>Fecha</th><th>Motivo</th><th>Contenido</th><th>Estado</th><th></th></tr></thead>
     <tbody>
     ${list.length? list.map(p=>{
       const editable = session.role==='admin' || (session.role==='seccion' && p.teacherId===session.teacherId);
@@ -1476,17 +1481,18 @@ function renderPendientes(){
         <td>${esc(sectionName(p.sectionId))}</td>
         <td class="cell-muted">${esc(teacherName(p.teacherId))}</td>
         <td>${p.semana||'—'}</td>
+        <td class="cell-muted">${p.fecha? fmtDate(p.fecha) : '—'}</td>
         <td>${esc(p.motivo)}</td>
         <td class="cell-muted">${esc(p.contenido||'—')}</td>
         <td>${pendienteEstadoBadge(p.estado)}</td>
         <td>${editable? `
           <select class="select" style="padding:5px 8px; font-size:12px;" data-action="pendiente-estado" data-id="${p.id}">
             <option value="pendiente" ${p.estado==='pendiente'?'selected':''}>Pendiente</option>
-            <option value="en_recuperacion" ${p.estado==='en_recuperacion'?'selected':''}>En recuperación</option>
-            <option value="completado" ${p.estado==='completado'?'selected':''}>Completado</option>
+            <option value="en_recuperacion" ${p.estado==='en_recuperacion'?'selected':''}>En proceso</option>
+            <option value="completado" ${p.estado==='completado'?'selected':''}>Recuperado</option>
           </select>`:''}</td>
       </tr>`;
-    }).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="em-icon">${icon('checkCircle')}</div><div class="em-title">Sin contenidos pendientes</div>Se generan automáticamente al finalizar una rotación sin notas, o marcando una ausencia en el informe semanal.</div></td></tr>`}
+    }).join('') : `<tr><td colspan="9"><div class="empty-state"><div class="em-icon">${icon('checkCircle')}</div><div class="em-title">Sin contenidos pendientes</div>Se generan automáticamente por ausencias cargadas en la Planilla Digital FAT, al finalizar una rotación sin notas, o marcando una ausencia en el informe semanal.</div></td></tr>`}
     </tbody>
   </table>
   </div>`;
@@ -1575,6 +1581,23 @@ function sectionColor(sectionId){
 }
 function mondayOf(iso){ const d=new Date(iso+'T00:00:00'); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day); return d.toISOString().slice(0,10); }
 
+// Junta TODOS los registros de asistencia cargados en Planillas Digitales FAT para un alumno
+// que caen dentro de un rango de fechas (una semana del cronograma) — es la integración
+// automática entre "Planilla Digital FAT" y "Cronograma de Rotaciones".
+function attendanceSummaryFor(studentId, weekStart, weekEnd){
+  const planillasDelAlumno = (PLANILLAS||[]).filter(p=>p.studentId===studentId);
+  const dias = [];
+  planillasDelAlumno.forEach(p=>{
+    (p.asistencia||[]).forEach(a=>{
+      if(a.fecha>=weekStart && a.fecha<=weekEnd) dias.push(a);
+    });
+  });
+  dias.sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const presentes = dias.filter(d=>d.estado==='presente').length;
+  const ausentes = dias.filter(d=>d.estado==='ausente').length;
+  return { dias, presentes, ausentes, total:dias.length };
+}
+
 function renderCronograma(){
   let students = DB.students.filter(s=>s.estado==='activo'||s.estado==='pausado');
   if(ui.cronFiltroGrupo) students = students.filter(s=>s.groupId===ui.cronFiltroGrupo);
@@ -1631,8 +1654,15 @@ function renderCronograma(){
                 : `<td class="cron-cell cron-cell-empty"></td>`;
             }
             const color = sectionColor(rot.sectionId);
-            return `<td class="cron-cell" style="background:${color}22;" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)}) · ${esc(sectionName(rot.sectionId))}${rot.empresa?' · '+esc(rot.empresa):''} · ${esc(teacherName(rot.teacherId))}">
-              <div class="cron-cell-bar" style="background:${color};"></div>
+            const asis = attendanceSummaryFor(s.id, weekStart, weekEnd);
+            let indicator = '';
+            if(asis.total>0){
+              if(asis.ausentes===0){ indicator = `<span class="cron-attend-dot cron-attend-ok" title="Asistió todos los días registrados esta semana">${icon('check','icon-sm')}</span>`; }
+              else if(asis.presentes===0){ indicator = `<span class="cron-attend-dot cron-attend-bad" title="No asistió ningún día registrado esta semana">${icon('x','icon-sm')}</span>`; }
+              else{ indicator = `<span class="cron-attend-dot cron-attend-warn" title="${asis.ausentes} inasistencia(s) esta semana"></span>`; }
+            }
+            return `<td class="cron-cell" style="background:${color}22;" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" data-week-num="${n}" data-week-start="${weekStart}" data-week-end="${weekEnd}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)}) · ${esc(sectionName(rot.sectionId))}${rot.empresa?' · '+esc(rot.empresa):''} · ${esc(teacherName(rot.teacherId))}${asis.total?' · '+asis.presentes+' presente(s), '+asis.ausentes+' ausencia(s)':''}">
+              <div class="cron-cell-bar" style="background:${color};">${indicator}</div>
             </td>`;
           }).join('')}
         </tr>`;
@@ -1646,7 +1676,23 @@ function renderCronograma(){
 
 function cronogramaEditFormHtml(rot){
   const student = DB.students.find(s=>s.id===rot.studentId);
+  let asistenciaPanel = '';
+  if(rot._weekStart && rot._weekEnd){
+    const asis = attendanceSummaryFor(rot.studentId, rot._weekStart, rot._weekEnd);
+    asistenciaPanel = `
+    <div class="section-card" style="background:var(--surface-2); margin-bottom:16px;">
+      <h3 style="font-size:13px;">${icon('checkCircle','icon-sm')} Asistencia — Semana ${esc(rot._weekNum||'')} <span class="cell-muted" style="font-weight:500; font-size:11.5px;">(desde Planilla Digital FAT)</span></h3>
+      <div class="kv" style="margin-bottom:${asis.dias.length?'10px':'0'};">
+        <dt>Empresa</dt><dd>${esc(rot.empresa)||'—'}</dd>
+        <dt>Profesor MEP</dt><dd>${esc(teacherName(rot.teacherId))}</dd>
+        <dt>Días asistidos</dt><dd>${asis.presentes}</dd>
+        <dt>Ausencias</dt><dd>${asis.ausentes}</dd>
+      </div>
+      ${asis.dias.length? `<ul class="mono-list">${asis.dias.map(d=>`<li><span>${fmtDate(d.fecha)}</span>${asistenciaBadge(d.estado)}</li>`).join('')}</ul>` : `<p class="cell-muted" style="font-size:12px;">Todavía no se cargó asistencia para esta semana en ninguna Planilla Digital FAT de este alumno.</p>`}
+    </div>`;
+  }
   return `
+  ${asistenciaPanel}
   <div class="kv" style="margin-bottom:14px;"><dt>Alumno</dt><dd>${esc(student?student.nombre+' '+student.apellido:'—')}</dd></div>
   <div class="field-row">
     <div class="field"><label>Sección</label>
@@ -2387,6 +2433,7 @@ function attachGlobalEvents(){
       ui.view = t.getAttribute('data-view'); ui.notifOpen=false; ui.sidebarOpen=false; render();
       if(ui.view==='documentos' && !DOCS){ try{ await loadDocumentos(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los documentos','red'); } }
       if(ui.view==='planillas'){ try{ await Promise.all([loadPlanillas(), CRITERIOS?Promise.resolve():loadCriterios()]); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas','red'); } }
+      if(ui.view==='cronograma' && !PLANILLAS){ try{ ui.plnFilters={}; await loadPlanillas(); render(); }catch(e){ /* si falla, el cronograma sigue funcionando sin el indicador de asistencia */ } }
       if(ui.view==='config' && !CRITERIOS && session.role==='admin'){ try{ await loadCriterios(); render(); }catch(e){ /* no crítico */ } }
       if(ui.view==='usuarios'){ try{ await loadUsuarios(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los usuarios','red'); } }
     }
@@ -2473,7 +2520,11 @@ function attachGlobalEvents(){
       });
     }
     else if(action==='new-criterio'){ ui.modal={type:'criterio-form', data:null}; render(); }
-    else if(action==='cron-edit'){ ui.modal={type:'cronograma-edit-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
+    else if(action==='cron-edit'){
+      const rot = DB.rotations.find(r=>r.id===id);
+      const weekData = { ...rot, _weekNum:t.getAttribute('data-week-num'), _weekStart:t.getAttribute('data-week-start'), _weekEnd:t.getAttribute('data-week-end') };
+      ui.modal={type:'cronograma-edit-form', data:weekData}; render();
+    }
     else if(action==='cron-add'){
       ui.modal={type:'cronograma-add-form', data:{ studentId:t.getAttribute('data-student-id'), weekStart:t.getAttribute('data-week-start'), weekEnd:t.getAttribute('data-week-end') }};
       render();
