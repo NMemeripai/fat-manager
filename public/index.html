@@ -475,6 +475,16 @@ function icon(name, extraCls){
 const API_BASE = ''; // mismo origen: Express sirve esta página y la API
 let authToken = null;
 
+function handleSessionExpired(){
+  const yaEstabaLogueado = !!authToken;
+  authToken=null; session=null; localStorage.removeItem('fat_token'); localStorage.removeItem('fat_session');
+  const msg = yaEstabaLogueado
+    ? 'Tu sesión expiró (por seguridad, dura unas horas). Iniciá sesión de nuevo — lo que ya se había guardado antes sigue intacto.'
+    : 'Tu sesión expiró. Iniciá sesión de nuevo para continuar.';
+  const appEl = document.getElementById('app');
+  if(appEl){ appEl.innerHTML = renderLogin(msg); attachLoginEvents(); }
+  return msg;
+}
 async function apiFetch(method, url, body){
   const headers = {'Content-Type':'application/json'};
   if(authToken) headers.Authorization = 'Bearer '+authToken;
@@ -487,7 +497,7 @@ async function apiFetch(method, url, body){
   let data = null;
   try{ data = await res.json(); }catch(e){ /* respuesta sin cuerpo */ }
   if(!res.ok){
-    if(res.status===401){ authToken=null; session=null; localStorage.removeItem('fat_token'); localStorage.removeItem('fat_session'); }
+    if(res.status===401) throw new Error(handleSessionExpired());
     throw new Error((data && data.error) ? data.error : ('Error del servidor ('+res.status+')'));
   }
   return data;
@@ -543,6 +553,7 @@ let planillaSaveTimer = null;
 async function downloadAuthFile(url, fallbackName){
   try{
     const res = await fetch(API_BASE+url, { headers: { Authorization: 'Bearer '+authToken } });
+    if(res.status===401) throw new Error(handleSessionExpired());
     if(!res.ok){
       let msg = 'No se pudo descargar el archivo';
       try{ msg = (await res.json()).error || msg; }catch(e){}
@@ -565,6 +576,7 @@ async function exportPlanillaDocx(id){
   try{
     toast('Generando el documento Word…');
     const res = await fetch(API_BASE+'/api/planillas/'+id+'/export-docx', { headers: { Authorization: 'Bearer '+authToken } });
+    if(res.status===401) throw new Error(handleSessionExpired());
     if(!res.ok){
       let msg = 'No se pudo generar el documento';
       try{ msg = (await res.json()).error || msg; }catch(e){}
@@ -2843,6 +2855,7 @@ async function uploadDocumento(){
       };
       xhr.onload = ()=>{
         if(xhr.status>=200 && xhr.status<300) resolve();
+        else if(xhr.status===401) reject(new Error(handleSessionExpired()));
         else{ let msg='No se pudo subir el archivo'; try{ msg = JSON.parse(xhr.responseText).error||msg; }catch(e){} reject(new Error(msg)); }
       };
       xhr.onerror = ()=> reject(new Error('Error de conexión al subir el archivo'));
