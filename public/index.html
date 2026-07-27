@@ -303,6 +303,7 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 
 /* toasts */
 .toast-stack{position:fixed; bottom:22px; right:22px; z-index:200; display:flex; flex-direction:column; gap:10px; align-items:flex-end;}
+@media(max-width:480px){ .toast-stack{ left:14px; right:14px; bottom:16px; align-items:stretch; } .toast{ min-width:0; width:100%; } }
 .toast{background:var(--surface); border:1px solid var(--border); box-shadow:var(--shadow-lg); padding:12px 16px; border-radius:var(--r-md); font-size:13px; font-weight:600; display:flex; align-items:center; gap:10px; min-width:240px; animation:slideInRight .25s var(--ease);}
 .toast-ico{width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
 .toast.leaving{animation:fadeIn .2s var(--ease) reverse;}
@@ -321,7 +322,7 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 
 @media(max-width:1024px){
   .content{padding:20px;}
-  .grid-cards{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));}
+  .grid-cards{grid-template-columns:1fr 1fr;} /* tablet: 2 tarjetas por fila */
 }
 @media(max-width:880px){
   .sidebar{position:fixed; left:-232px; z-index:50; transition:left .22s var(--ease); top:0;}
@@ -335,10 +336,23 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 }
 @media(max-width:560px){
   .search-wrap{max-width:none;}
-  .grid-cards{grid-template-columns:1fr 1fr;}
+  .grid-cards{grid-template-columns:1fr;} /* celular: 1 tarjeta por fila */
   .brand-name{display:none;}
   .brand-sub{display:none;}
+  /* Evita que iOS Safari haga zoom automático al tocar un campo (pasa siempre que
+     la letra sea menor a 16px); en celular usamos 16px sin cambiar el diseño de escritorio. */
+  .select, .input, textarea.input{ font-size:16px; padding:11px 12px; }
+  /* Área táctil mínima recomendada (~44px) para botones y paginado, solo en celular */
+  .btn{ min-height:42px; padding:10px 16px; }
+  .btn-sm{ min-height:38px; padding:8px 13px; }
+  .icon-btn{ width:40px; height:40px; }
+  .pager-btn{ width:34px; height:34px; }
+  .nav-item{ padding:12px 12px; }
+  .cron-cell{ min-width:48px; height:40px; }
+  .modal-foot .btn, .modal-head .icon-btn{ min-height:42px; }
 }
+/* Scroll táctil suave (momentum) en tablas y modales largos, en cualquier dispositivo táctil */
+.table-wrap, .modal-body{ -webkit-overflow-scrolling:touch; }
 .planilla-doc{background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--shadow-sm); padding:44px 52px; max-width:820px; margin:0 auto; font-family:'Inter',serif;}
 .planilla-doc-header{display:flex; align-items:center; gap:16px; border-bottom:2px solid var(--accent); padding-bottom:16px; margin-bottom:20px;}
 .planilla-doc-logo{width:52px; height:52px; border-radius:10px; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; flex-shrink:0;}
@@ -2468,6 +2482,7 @@ function attachGlobalEvents(){
 
     if(action==='nav'){
       ui.view = t.getAttribute('data-view'); ui.notifOpen=false; ui.sidebarOpen=false; render();
+      try{ localStorage.setItem('fat_last_view', ui.view); }catch(e){}
       if(ui.view==='documentos' && !DOCS){ try{ await loadDocumentos(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los documentos','red'); } }
       if(ui.view==='planillas'){ try{ await Promise.all([loadPlanillas(), CRITERIOS?Promise.resolve():loadCriterios()]); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas','red'); } }
       if(ui.view==='cronograma' && !PLANILLAS){ try{ ui.plnFilters={}; await loadPlanillas(); render(); }catch(e){ /* si falla, el cronograma sigue funcionando sin el indicador de asistencia */ } }
@@ -3102,7 +3117,20 @@ async function init(){
   if(session && authToken){
     try{
       if(session.role==='alumno'){ await loadStudentPortal(); }
-      else{ await loadDB(); if(session.role==='seccion') ui.view = 'teacherHome'; }
+      else{
+        await loadDB();
+        ui.view = session.role==='seccion' ? 'teacherHome' : 'dashboard';
+        const vistasRestaurables = ['dashboard','teacherHome','students','sections','rotations','grades','guidelines','reports','pendientes','cronograma','planillas','documentos','usuarios','config'];
+        try{
+          const ultimaVista = localStorage.getItem('fat_last_view');
+          if(ultimaVista && vistasRestaurables.includes(ultimaVista)) ui.view = ultimaVista;
+        }catch(e){}
+        if(ui.view==='documentos') loadDocumentos().catch(()=>{}).then(render);
+        if(ui.view==='planillas') Promise.all([loadPlanillas(), loadCriterios()]).catch(()=>{}).then(render);
+        if(ui.view==='cronograma'){ ui.plnFilters={}; loadPlanillas().catch(()=>{}).then(render); }
+        if(ui.view==='config' && session.role==='admin') loadCriterios().catch(()=>{}).then(render);
+        if(ui.view==='usuarios') loadUsuarios().catch(()=>{}).then(render);
+      }
       if(session.role==='seccion' || session.role==='alumno'){ loadMyDocumentos().then(render).catch(()=>{}); }
     }catch(e){
       console.error('No se pudo restaurar la sesión', e);
