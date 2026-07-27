@@ -431,6 +431,12 @@ function addDays(iso,n){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate(
 function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso+'T00:00:00'); return d.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}); }
 function daysBetween(a,b){ return Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000); }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function formatFileSize(bytes){
+  if(bytes==null) return '';
+  if(bytes<1024) return bytes+' B';
+  if(bytes<1024*1024) return (bytes/1024).toFixed(1)+' KB';
+  return (bytes/(1024*1024)).toFixed(1)+' MB';
+}
 function initials(name){ return (name||'?').split(' ').filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join(''); }
 function fmtRelative(iso){
   const diff = Math.round((Date.now() - new Date(iso).getTime())/1000);
@@ -791,25 +797,38 @@ function renderStudentPortalPage(){
 
       <div class="section-card">
         <h3>Tu seguimiento de esta semana</h3>
-        <div class="field-row">
-          <div class="field" style="display:flex; align-items:center; gap:8px;">
-            <label style="display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; margin-bottom:0; cursor:pointer;">
-              <input type="checkbox" id="sp-leido" ${misRespuestas&&misRespuestas.leido?'checked':''} style="width:16px; height:16px;"> Leí el contenido de esta semana
-            </label>
-          </div>
-          <div class="field" style="display:flex; align-items:center; gap:8px;">
-            <label style="display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; margin-bottom:0; cursor:pointer;">
-              <input type="checkbox" id="sp-actividad" ${misRespuestas&&misRespuestas.actividadRealizada?'checked':''} style="width:16px; height:16px;"> Realicé la actividad
-            </label>
-          </div>
-        </div>
-        <div class="field"><label>Observaciones o consultas para tu profesor</label><textarea class="input" id="sp-observacion" placeholder="Escribí acá cualquier duda o comentario...">${misRespuestas?esc(misRespuestas.observacion||''):''}</textarea></div>
-        <button class="btn btn-primary" data-action="submit-student-respuesta" data-rotation-id="${c.id}" data-semana="${wk}">${icon('check','icon-sm')} Guardar respuesta de esta semana</button>
-      </div>
 
-      <div class="section-card">
-        <h3>Informes de tu profesor</h3>
-        ${(c.informesSemanales||[]).length? `<ul class="mono-list">${c.informesSemanales.slice().sort((a,b)=>a.semana-b.semana).map(i=>`<li><span>Semana ${i.semana}${i.nota!=null?' · <span class="badge badge-accent">Nota '+i.nota+'</span>':''}${i.texto?': '+esc(i.texto):''}</span><span class="cell-muted">${fmtDate(i.fecha)}</span></li>`).join('')}</ul>` : `<div class="empty-state">Tu profesor todavía no cargó informes esta rotación.</div>`}
+        <div class="field" style="display:flex; align-items:center; gap:10px; padding:13px 15px; background:var(--surface-2); border-radius:var(--r-md);">
+          <label style="display:flex; align-items:center; gap:10px; font-weight:650; font-size:13.5px; margin-bottom:0; cursor:pointer; width:100%;">
+            <input type="checkbox" id="sp-leido" ${misRespuestas&&misRespuestas.leido?'checked':''} style="width:18px; height:18px; flex-shrink:0;"> ¿Leíste el contenido de esta semana?
+          </label>
+        </div>
+
+        <div class="field" style="display:flex; align-items:center; gap:10px; padding:13px 15px; background:var(--surface-2); border-radius:var(--r-md);">
+          <label style="display:flex; align-items:center; gap:10px; font-weight:650; font-size:13.5px; margin-bottom:0; cursor:pointer; width:100%;">
+            <input type="checkbox" id="sp-actividad" ${misRespuestas&&misRespuestas.actividadRealizada?'checked':''} style="width:18px; height:18px; flex-shrink:0;"> ¿Realizaste la actividad solicitada?
+          </label>
+        </div>
+
+        <div class="field">
+          <label>Subir Documento</label>
+          <label class="file-drop" for="sp-doc-file" id="sp-doc-file-label" style="display:flex; flex-direction:column; align-items:center; gap:6px; padding:30px 16px;">
+            ${icon('upload','icon-lg')}
+            <div id="sp-doc-file-text" style="font-weight:650; font-size:13.5px;">${(misRespuestas&&misRespuestas.documentoNombre)? esc(misRespuestas.documentoNombre) : 'Hacé clic para subir tu documento'}</div>
+            <div style="font-size:11.5px; color:var(--text-3);">PDF, Word (.doc / .docx) o Excel (.xls / .xlsx)</div>
+          </label>
+          <input type="file" id="sp-doc-file" accept=".pdf,.doc,.docx,.xls,.xlsx" style="display:none;">
+          <div id="sp-doc-status" style="margin-top:9px; font-size:12.5px;">${(misRespuestas&&misRespuestas.documentoNombre)? `<span class="file-chip">${icon('paperclip','icon-sm')} ${esc(misRespuestas.documentoNombre)}</span>` : ''}</div>
+          <div id="sp-doc-progress-wrap" style="display:none; margin-top:9px;">
+            <div class="bar-track"><div class="bar-fill" id="sp-doc-progress-bar" style="width:0%;"></div></div>
+          </div>
+          <input type="hidden" id="sp-doc-url" value="${(misRespuestas&&misRespuestas.documentoUrl)||''}">
+          <input type="hidden" id="sp-doc-name" value="${(misRespuestas&&misRespuestas.documentoNombre)||''}">
+        </div>
+
+        <div class="field"><label>Observaciones</label><textarea class="input" id="sp-observacion" placeholder="Escribí acá cualquier comentario sobre esta semana..." style="min-height:110px;">${misRespuestas?esc(misRespuestas.observacion||''):''}</textarea></div>
+
+        <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:2px;" data-action="submit-student-respuesta" data-rotation-id="${c.id}" data-semana="${wk}">${icon('check','icon-sm')} Guardar respuesta de esta semana</button>
       </div>
       ` : `<div class="empty-state"><div class="em-icon">${icon('calendar')}</div><div class="em-title">No tenés una rotación activa en este momento</div></div>`}
 
@@ -2500,8 +2519,10 @@ function attachGlobalEvents(){
       const leido = document.getElementById('sp-leido').checked;
       const actividadRealizada = document.getElementById('sp-actividad').checked;
       const observacion = document.getElementById('sp-observacion').value.trim();
+      const documentoUrl = document.getElementById('sp-doc-url').value;
+      const documentoNombre = document.getElementById('sp-doc-name').value;
       try{
-        await apiFetch('POST', '/api/mi-portal/respuesta', { rotationId, semana, leido, actividadRealizada, observacion });
+        await apiFetch('POST', '/api/mi-portal/respuesta', { rotationId, semana, leido, actividadRealizada, observacion, documentoUrl, documentoNombre });
         await loadStudentPortal(); render(); toast('Respuesta guardada');
       }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
     }
@@ -2793,6 +2814,57 @@ function attachGlobalEvents(){
       const f = t.files && t.files[0];
       const textEl = document.getElementById('f-doc-file-text');
       if(f && textEl) textEl.textContent = f.name;
+    }
+    else if(t.id==='sp-doc-file'){
+      const f = t.files && t.files[0];
+      if(!f) return;
+      const allowedExt = ['.pdf','.doc','.docx','.xls','.xlsx'];
+      const ext = '.'+(f.name.split('.').pop()||'').toLowerCase();
+      const textEl = document.getElementById('sp-doc-file-text');
+      const statusEl = document.getElementById('sp-doc-status');
+      const progressWrap = document.getElementById('sp-doc-progress-wrap');
+      const progressBar = document.getElementById('sp-doc-progress-bar');
+      if(!allowedExt.includes(ext)){
+        toast('Formato no permitido. Solo PDF, Word o Excel', 'red');
+        t.value = '';
+        return;
+      }
+      if(textEl) textEl.textContent = f.name;
+      if(statusEl) statusEl.innerHTML = '<span class="cell-muted">'+formatFileSize(f.size)+' · Subiendo…</span>';
+      if(progressWrap) progressWrap.style.display = 'block';
+      if(progressBar) progressBar.style.width = '0%';
+
+      const fd = new FormData();
+      fd.append('file', f);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', API_BASE+'/api/upload');
+      xhr.setRequestHeader('Authorization', 'Bearer '+authToken);
+      xhr.upload.onprogress = (ev)=>{
+        if(ev.lengthComputable && progressBar) progressBar.style.width = Math.round((ev.loaded/ev.total)*100)+'%';
+      };
+      xhr.onload = ()=>{
+        if(xhr.status>=200 && xhr.status<300){
+          let data={}; try{ data = JSON.parse(xhr.responseText); }catch(err){}
+          const urlField = document.getElementById('sp-doc-url'); if(urlField) urlField.value = data.url||'';
+          const nameField = document.getElementById('sp-doc-name'); if(nameField) nameField.value = data.name||f.name;
+          if(statusEl) statusEl.innerHTML = '<span class="file-chip">'+icon('paperclip','icon-sm')+' '+esc(data.name||f.name)+' · '+formatFileSize(f.size)+'</span>';
+          if(progressWrap) progressWrap.style.display = 'none';
+          toast('Documento subido');
+        } else {
+          let msg = 'No se pudo subir el archivo';
+          if(xhr.status===401){ msg = handleSessionExpired(); }
+          else { try{ msg = JSON.parse(xhr.responseText).error||msg; }catch(err){} }
+          if(statusEl) statusEl.innerHTML = '<span style="color:var(--red);">'+esc(msg)+'</span>';
+          if(progressWrap) progressWrap.style.display = 'none';
+          toast(msg, 'red');
+        }
+      };
+      xhr.onerror = ()=>{
+        if(statusEl) statusEl.innerHTML = '<span style="color:var(--red);">Error de conexión al subir el archivo</span>';
+        if(progressWrap) progressWrap.style.display = 'none';
+        toast('Error de conexión al subir el archivo', 'red');
+      };
+      xhr.send(fd);
     }
     else if(t.id==='f-r-file'){
       const f = t.files && t.files[0];
