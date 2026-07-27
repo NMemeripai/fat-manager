@@ -696,6 +696,11 @@ function currentWeekOf(student, config) {
   const wk = Math.floor(d / 7) + 1;
   return Math.max(1, Math.min(wk, config.totalWeeks));
 }
+function currentWeekOfDate(student, config, dateISO) {
+  const d = Math.round((new Date(dateISO + 'T00:00:00') - new Date(student.fechaInicio + 'T00:00:00')) / 86400000);
+  const wk = Math.floor(d / 7) + 1;
+  return Math.max(1, Math.min(wk, config.totalWeeks || 999));
+}
 
 app.post('/api/mi-portal/respuesta', auth, requireRole('alumno'), h(async (req, res) => {
   const studentId = req.user.studentId;
@@ -912,6 +917,34 @@ app.put('/api/planillas/:id', auth, h(async (req, res) => {
   if (calificacion !== undefined) update.calificacion = calificacion;
   if (observaciones !== undefined) update.observaciones = observaciones;
   await db.collection('planillas').doc(req.params.id).update(update);
+
+  // Integración automática: cada ausencia cargada en la Planilla genera (una sola vez)
+  // su propio registro en Contenidos Pendientes, sin que el profesor tenga que cargar nada dos veces.
+  if (asistencia !== undefined) {
+    const ausencias = (asistencia || []).filter(a => a.estado === 'ausente');
+    if (ausencias.length) {
+      const student = await docData('students', p.studentId);
+      const cfgSnap = await db.collection('config').doc('main').get();
+      const config = cfgSnap.data();
+      const existingPendientes = await whereEquals('pendientes', 'studentId', p.studentId);
+      for (const a of ausencias) {
+        const yaExiste = existingPendientes.some(pe => pe.sectionId === p.sectionId && pe.fecha === a.fecha);
+        if (yaExiste) continue;
+        const semana = student ? currentWeekOfDate(student, config, a.fecha) : null;
+        const id = uid('p');
+        const record = {
+          studentId: p.studentId, sectionId: p.sectionId, teacherId: p.teacherId,
+          semana, fecha: a.fecha, motivo: 'Ausente el ' + a.fecha + ' (Planilla Digital FAT)',
+          contenido: 'Recuperar el contenido de la semana correspondiente a esa fecha',
+          estado: 'pendiente', createdAt: new Date().toISOString(), origen: 'planilla', planillaId: p.id
+        };
+        await db.collection('pendientes').doc(id).set(record);
+        existingPendientes.push(record);
+      }
+      await logActivity(`Se generaron contenidos pendientes automáticos por ausencias cargadas en la Planilla FAT de ${student ? student.nombre + ' ' + student.apellido : 'un alumno'}.`);
+    }
+  }
+
   res.json({ ok: true, updatedAt: update.updatedAt });
 }));
 
