@@ -1608,10 +1608,20 @@ function renderCronograma(){
     return `<div class="page-head"><div><h1 class="page-title">Cronograma de Rotaciones</h1></div></div><div class="empty-state"><div class="em-icon">${icon('calendar')}</div><div class="em-title">No hay alumnos para mostrar con estos filtros</div></div>`;
   }
 
-  // Las semanas del cronograma salen de la duración total configurada del programa
-  // (suma de la duración de cada sección), NO de un rango de fechas calculado —
-  // así siempre se muestran todas las semanas, sean cuales sean las fechas de inicio de cada alumno.
-  const numWeeks = DB.config.totalWeeks || 20;
+  // Las semanas del cronograma arrancan en la duración total configurada del programa
+  // (por defecto, hoy 20), pero SE EXTIENDEN AUTOMÁTICAMENTE si algún alumno visible
+  // tiene una rotación (por ejemplo, una creada a mano en el Cronograma) cuya fecha cae
+  // más allá de esa ventana relativa a SU PROPIA fecha de inicio. Sin esto, una rotación
+  // guardada correctamente en la base de datos podía quedar sin ninguna columna donde
+  // mostrarse — el bug real detrás de "la rotación no aparece".
+  let numWeeks = DB.config.totalWeeks || 20;
+  students.forEach(s=>{
+    rotationsOf(s.id).forEach(r=>{
+      const weekOfStart = Math.floor(daysBetween(s.fechaInicio, r.startDate)/7)+1;
+      const weekOfEnd = Math.floor(daysBetween(s.fechaInicio, r.endDate)/7)+1;
+      numWeeks = Math.max(numWeeks, weekOfStart, weekOfEnd);
+    });
+  });
   const weekNumbers = Array.from({length: numWeeks}, (_,i)=>i+1);
 
   const cursos = [...new Set(DB.students.map(s=>s.curso))];
@@ -1619,7 +1629,7 @@ function renderCronograma(){
 
   return `
   <div class="page-head">
-    <div><h1 class="page-title">Cronograma de Rotaciones</h1><p class="page-sub">${students.length} alumno${students.length===1?'':'s'} · ${numWeeks} semanas de pasantía</p></div>
+    <div><h1 class="page-title">Cronograma de Rotaciones</h1><p class="page-sub">${students.length} alumno${students.length===1?'':'s'} · ${numWeeks} semanas${numWeeks>(DB.config.totalWeeks||20)? ' (se extendió más allá de las '+(DB.config.totalWeeks||20)+' por defecto para mostrar todas las rotaciones cargadas)' : ' de pasantía'}</p></div>
   </div>
   <div class="filters-row">
     <select class="select" data-action="cron-filtro-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${ui.cronFiltroGrupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
