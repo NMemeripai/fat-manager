@@ -97,11 +97,13 @@ app.post('/api/upload', auth, upload.single('file'), h(async (req, res) => {
 }));
 
 /* ---------------------------- Centro de Documentos ---------------------------- */
-const ALLOWED_DOC_EXT = ['.pdf', '.doc', '.docx'];
+const ALLOWED_DOC_EXT = ['.pdf', '.doc', '.docx', '.xls', '.xlsx'];
 const DOC_MIME_TYPES = {
   '.pdf': 'application/pdf',
   '.doc': 'application/msword',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 };
 function extOf(filename) {
   const i = filename.lastIndexOf('.');
@@ -112,7 +114,7 @@ app.post('/api/documentos', auth, upload.single('file'), h(async (req, res) => {
   if (!['admin', 'seccion', 'alumno'].includes(req.user.role)) return res.status(403).json({ error: 'No tenés permiso para subir documentos' });
   if (!req.file) return res.status(400).json({ error: 'No se envió ningún archivo' });
   const ext = extOf(req.file.originalname);
-  if (!ALLOWED_DOC_EXT.includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Solo se aceptan .pdf, .doc y .docx' });
+  if (!ALLOWED_DOC_EXT.includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Solo se aceptan .pdf, .doc, .docx, .xls y .xlsx' });
   if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
 
   let tipo, studentId = null, curso = null;
