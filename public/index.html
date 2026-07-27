@@ -419,9 +419,9 @@ let currentPlanillaId = null; // planilla abierta actualmente (vista detalle)
 let planillaViewMode = 'documento'; // 'documento' (estilo Word, solo lectura) | 'form' (edición)
 let session = null;
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
-  sort:{ students:{key:'nombre',dir:'asc'}, rotations:{key:'periodo',dir:'asc'} },
-  page:{ students:1, rotations:1 },
-  sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', plnFilters:{},
+  sort:{ students:{key:'nombre',dir:'asc'}, rotations:{key:'periodo',dir:'asc'}, documentosAlumno:{key:'fecha',dir:'desc'} },
+  page:{ students:1, rotations:1, documentosAlumno:1 },
+  sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
   cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'' };
 const PAGE_SIZE = 8;
 
@@ -658,6 +658,7 @@ function currentRotationOf(studentId){
   return cur;
 }
 function sectionName(id){ const s=DB.sections.find(x=>x.id===id); return s?s.nombre:'—'; }
+function groupName(id){ const g=(DB.groups||[]).find(x=>x.id===id); return g?g.nombre:'—'; }
 function teacherName(id){ const t=DB.teachers.find(x=>x.id===id); return t?t.nombre:'—'; }
 function studentName(id){ const s=DB.students.find(x=>x.id===id); return s? s.nombre+' '+s.apellido : '—'; }
 function rotationAvg(rotation){
@@ -822,7 +823,7 @@ function renderStudentPortalPage(){
           <div id="sp-doc-progress-wrap" style="display:none; margin-top:9px;">
             <div class="bar-track"><div class="bar-fill" id="sp-doc-progress-bar" style="width:0%;"></div></div>
           </div>
-          <input type="hidden" id="sp-doc-url" value="${(misRespuestas&&misRespuestas.documentoUrl)||''}">
+          <input type="hidden" id="sp-doc-id" value="${(misRespuestas&&misRespuestas.documentoId)||''}">
           <input type="hidden" id="sp-doc-name" value="${(misRespuestas&&misRespuestas.documentoNombre)||''}">
         </div>
 
@@ -2043,33 +2044,124 @@ function usuarioFormHtml(u){
   `;
 }
 
+function formatoLabel(formato){ return {pdf:'PDF', word:'Word', excel:'Excel'}[formato] || 'Otro'; }
+function docEstadoBadge(estado){
+  const map = { entregado:['green','Entregado'], en_progreso:['amber','En progreso'] };
+  const [c,l] = map[estado] || ['neutral', estado||'—'];
+  return `<span class="badge badge-${c}"><span class="badge-dot-ico"></span>${l}</span>`;
+}
+function docAlumnoSortValue(d, key){
+  switch(key){
+    case 'alumno': return (d.studentId? studentName(d.studentId):'').toLowerCase();
+    case 'curso': return (d.curso||'').toLowerCase();
+    case 'grupo': return (d.groupId? groupName(d.groupId):'').toLowerCase();
+    case 'seccion': return (d.sectionId? sectionName(d.sectionId):'').toLowerCase();
+    case 'semana': return d.semana==null? -1 : Number(d.semana);
+    case 'fecha': return d.createdAt||d.fecha||'';
+    case 'archivo': return (d.nombre||'').toLowerCase();
+    case 'tamano': return d.tamano||0;
+    case 'estado': return d.estado||'';
+    default: return '';
+  }
+}
 function renderDocumentos(){
   if(!DOCS) return `<div class="page-head"><div><h1 class="page-title">Centro de Documentos</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando documentos…</div>`;
+  const mepCount = DOCS.filter(d=>d.tipo==='mep').length;
+  const alCount = DOCS.filter(d=>d.tipo==='alumno').length;
+  const isViewAdmin = session.role==='viewadmin';
+  const tabsHtml = `
+  <div class="tabs">
+    <div class="tab ${ui.docTab==='mep'?'active':''}" data-action="doc-tab" data-tab="mep">${icon('file','icon-sm')} Documentos MEP (${mepCount})</div>
+    <div class="tab ${ui.docTab==='alumno'?'active':''}" data-action="doc-tab" data-tab="alumno">${icon('users','icon-sm')} Documentos Alumnos (${alCount})</div>
+  </div>`;
+  const header = `
+  <div class="page-head">
+    <div><h1 class="page-title">Centro de Documentos</h1><p class="page-sub">${DOCS.length} documento${DOCS.length===1?'':'s'} en total</p></div>
+    ${!isViewAdmin? `<button class="btn btn-primary" data-action="new-documento">${icon('upload','icon-sm')} Subir documento</button>`:''}
+  </div>`;
+
+  if(ui.docTab==='alumno'){
+    let list = DOCS.filter(d=>d.tipo==='alumno');
+    const f = ui.docFilters;
+    if(ui.docSearch){
+      const q = ui.docSearch.toLowerCase();
+      list = list.filter(d=> d.nombre.toLowerCase().includes(q) || (d.studentId && studentName(d.studentId).toLowerCase().includes(q)) || (d.curso||'').toLowerCase().includes(q));
+    }
+    if(f.curso) list = list.filter(d=>d.curso===f.curso);
+    if(f.grupo) list = list.filter(d=>d.groupId===f.grupo);
+    if(f.seccion) list = list.filter(d=>d.sectionId===f.seccion);
+
+    const cursos = [...new Set(DOCS.filter(d=>d.tipo==='alumno' && d.curso).map(d=>d.curso))];
+    const { pageItems, totalPages, page, total } = sortAndPaginate(list, 'documentosAlumno', docAlumnoSortValue);
+
+    return `
+    ${header}
+    ${tabsHtml}
+    <div class="filters-row">
+      <input class="input" style="min-width:220px;" id="doc-search" placeholder="Buscar por alumno o archivo…" value="${esc(ui.docSearch)}">
+      <select class="select" data-action="filter-doc-curso"><option value="">Todos los cursos</option>${cursos.map(c=>`<option value="${esc(c)}" ${f.curso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
+      <select class="select" data-action="filter-doc-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${f.grupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
+      <select class="select" data-action="filter-doc-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.seccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+    </div>
+    <div class="table-wrap">
+    <table>
+      <thead><tr>
+        ${thSort('documentosAlumno','alumno','Alumno')}
+        ${thSort('documentosAlumno','curso','Curso')}
+        ${thSort('documentosAlumno','grupo','Grupo')}
+        ${thSort('documentosAlumno','seccion','Sección')}
+        ${thSort('documentosAlumno','semana','Semana')}
+        ${thSort('documentosAlumno','archivo','Archivo')}
+        <th>Tipo</th>
+        ${thSort('documentosAlumno','tamano','Tamaño')}
+        ${thSort('documentosAlumno','fecha','Fecha')}
+        <th>Hora</th>
+        ${thSort('documentosAlumno','estado','Estado')}
+        <th></th>
+      </tr></thead>
+      <tbody>
+      ${pageItems.length? pageItems.map(d=>`
+        <tr>
+          <td class="cell-strong">${d.studentId? esc(studentName(d.studentId)) : '—'}</td>
+          <td class="cell-muted">${esc(d.curso||'—')}</td>
+          <td class="cell-muted">${d.groupId? esc(groupName(d.groupId)) : '—'}</td>
+          <td class="cell-muted">${d.sectionId? esc(sectionName(d.sectionId)) : '—'}</td>
+          <td>${d.semana!=null? d.semana : '—'}</td>
+          <td>${icon(docIcon(d.nombre),'icon-sm')} ${esc(d.nombre)}</td>
+          <td><span class="badge badge-neutral">${formatoLabel(d.formato)}</span></td>
+          <td class="cell-muted">${formatFileSize(d.tamano)}</td>
+          <td>${fmtDate(d.fecha)}</td>
+          <td class="cell-muted">${esc(d.hora||'—')}</td>
+          <td>${docEstadoBadge(d.estado)}</td>
+          <td style="white-space:nowrap;">
+            <button class="btn btn-sm" data-action="download-documento" data-id="${d.id}" data-name="${esc(d.nombre)}">${icon('download','icon-sm')} Ver/Descargar</button>
+            ${!isViewAdmin? `<button class="btn btn-sm btn-danger" data-action="delete-documento" data-id="${d.id}">${icon('trash','icon-sm')}</button>`:''}
+          </td>
+        </tr>`).join('') : `<tr><td colspan="12"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin documentos de alumnos</div></div></td></tr>`}
+      </tbody>
+    </table>
+    ${renderPager('documentosAlumno', page, totalPages, total)}
+    </div>
+    <p class="help-text" style="margin-top:10px;">Los PDF se pueden previsualizar directo en la mayoría de los navegadores; los archivos Word (.doc/.docx) y Excel (.xls/.xlsx) generalmente se descargan, según la configuración de cada navegador.</p>
+    `;
+  }
+
   let list = DOCS.filter(d=>d.tipo===ui.docTab);
   if(ui.docSearch){
     const q = ui.docSearch.toLowerCase();
     list = list.filter(d=> d.nombre.toLowerCase().includes(q) || (d.uploadedByNombre||'').toLowerCase().includes(q) || (d.studentId && studentName(d.studentId).toLowerCase().includes(q)) || (d.observaciones||'').toLowerCase().includes(q));
   }
   list = list.slice().sort((a,b)=> (b.createdAt||'').localeCompare(a.createdAt||''));
-  const mepCount = DOCS.filter(d=>d.tipo==='mep').length;
-  const alCount = DOCS.filter(d=>d.tipo==='alumno').length;
-  const isViewAdmin = session.role==='viewadmin';
 
   return `
-  <div class="page-head">
-    <div><h1 class="page-title">Centro de Documentos</h1><p class="page-sub">${DOCS.length} documento${DOCS.length===1?'':'s'} en total</p></div>
-    ${!isViewAdmin? `<button class="btn btn-primary" data-action="new-documento">${icon('upload','icon-sm')} Subir documento</button>`:''}
-  </div>
-  <div class="tabs">
-    <div class="tab ${ui.docTab==='mep'?'active':''}" data-action="doc-tab" data-tab="mep">${icon('file','icon-sm')} Documentos MEP (${mepCount})</div>
-    <div class="tab ${ui.docTab==='alumno'?'active':''}" data-action="doc-tab" data-tab="alumno">${icon('users','icon-sm')} Documentos Alumnos (${alCount})</div>
-  </div>
+  ${header}
+  ${tabsHtml}
   <div class="filters-row">
     <input class="input" style="min-width:260px;" id="doc-search" placeholder="Buscar por archivo, quien lo subió, alumno u observaciones…" value="${esc(ui.docSearch)}">
   </div>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>Archivo</th><th>${ui.docTab==='mep'?'Profesor':'Alumno'}</th><th>Alumno relacionado</th><th>Fecha</th><th>Hora</th><th>Observaciones</th><th></th></tr></thead>
+    <thead><tr><th>Archivo</th><th>Profesor</th><th>Alumno relacionado</th><th>Fecha</th><th>Hora</th><th>Observaciones</th><th></th></tr></thead>
     <tbody>
     ${list.length? list.map(d=>`
       <tr>
@@ -2083,7 +2175,7 @@ function renderDocumentos(){
           <button class="btn btn-sm" data-action="download-documento" data-id="${d.id}" data-name="${esc(d.nombre)}">${icon('download','icon-sm')} Ver/Descargar</button>
           ${!isViewAdmin? `<button class="btn btn-sm btn-danger" data-action="delete-documento" data-id="${d.id}">${icon('trash','icon-sm')}</button>`:''}
         </td>
-      </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin documentos ${ui.docTab==='mep'?'de profesores':'de alumnos'}</div></div></td></tr>`}
+      </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin documentos de profesores</div></div></td></tr>`}
     </tbody>
   </table>
   </div>
@@ -2452,7 +2544,7 @@ function attachGlobalEvents(){
   }
   const docSearch = document.getElementById('doc-search');
   if(docSearch){
-    docSearch.addEventListener('input', e=>{ ui.docSearch = e.target.value; render(); document.getElementById('doc-search').focus(); document.getElementById('doc-search').setSelectionRange(999,999); });
+    docSearch.addEventListener('input', e=>{ ui.docSearch = e.target.value; ui.page.documentosAlumno=1; render(); document.getElementById('doc-search').focus(); document.getElementById('doc-search').setSelectionRange(999,999); });
   }
 
   if(globalEventsAttached) return; // el #app persiste entre renders (solo cambia su innerHTML);
@@ -2519,10 +2611,9 @@ function attachGlobalEvents(){
       const leido = document.getElementById('sp-leido').checked;
       const actividadRealizada = document.getElementById('sp-actividad').checked;
       const observacion = document.getElementById('sp-observacion').value.trim();
-      const documentoUrl = document.getElementById('sp-doc-url').value;
-      const documentoNombre = document.getElementById('sp-doc-name').value;
+      const documentoId = document.getElementById('sp-doc-id').value;
       try{
-        await apiFetch('POST', '/api/mi-portal/respuesta', { rotationId, semana, leido, actividadRealizada, observacion, documentoUrl, documentoNombre });
+        await apiFetch('POST', '/api/mi-portal/respuesta', { rotationId, semana, leido, actividadRealizada, observacion, documentoId: documentoId||null });
         await loadStudentPortal(); render(); toast('Respuesta guardada');
       }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
     }
@@ -2727,7 +2818,7 @@ function attachGlobalEvents(){
       render();
       autosavePlanilla({ asistencia: p.asistencia });
     }
-    else if(action==='doc-tab'){ ui.docTab = t.getAttribute('data-tab'); render(); }
+    else if(action==='doc-tab'){ ui.docTab = t.getAttribute('data-tab'); ui.page.documentosAlumno=1; render(); }
     else if(action==='download-documento'){ await downloadAuthFile('/api/documentos/'+id+'/download', t.getAttribute('data-name')); }
     else if(action==='download-rotation-attachment'){ await downloadAuthFile('/api/rotations/'+id+'/attachment', t.getAttribute('data-name')); }
     else if(action==='delete-documento'){
@@ -2790,6 +2881,9 @@ function attachGlobalEvents(){
     if(t.matches('[data-action="filter-curso"]')){ ui.filters.curso = t.value; ui.page.students=1; render(); }
     else if(t.matches('[data-action="filter-estado"]')){ ui.filters.estado = t.value; ui.page.students=1; render(); }
     else if(t.matches('[data-action="filter-seccion"]')){ ui.filters.seccion = t.value; ui.page.students=1; render(); }
+    else if(t.matches('[data-action="filter-doc-curso"]')){ ui.docFilters.curso = t.value; ui.page.documentosAlumno=1; render(); }
+    else if(t.matches('[data-action="filter-doc-grupo"]')){ ui.docFilters.grupo = t.value; ui.page.documentosAlumno=1; render(); }
+    else if(t.matches('[data-action="filter-doc-seccion"]')){ ui.docFilters.seccion = t.value; ui.page.documentosAlumno=1; render(); }
     else if(t.matches('[data-action="filter-grupo"]')){ ui.filters.grupo = t.value; ui.page.students=1; render(); }
     else if(t.matches('[data-action="filter-rot-seccion"]')){ ui.filters.rotSeccion = t.value; ui.page.rotations=1; render(); }
     else if(t.matches('[data-action="filter-rot-estado"]')){ ui.filters.rotEstado = t.value; ui.page.rotations=1; render(); }
@@ -2837,7 +2931,7 @@ function attachGlobalEvents(){
       const fd = new FormData();
       fd.append('file', f);
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', API_BASE+'/api/upload');
+      xhr.open('POST', API_BASE+'/api/documentos');
       xhr.setRequestHeader('Authorization', 'Bearer '+authToken);
       xhr.upload.onprogress = (ev)=>{
         if(ev.lengthComputable && progressBar) progressBar.style.width = Math.round((ev.loaded/ev.total)*100)+'%';
@@ -2845,9 +2939,9 @@ function attachGlobalEvents(){
       xhr.onload = ()=>{
         if(xhr.status>=200 && xhr.status<300){
           let data={}; try{ data = JSON.parse(xhr.responseText); }catch(err){}
-          const urlField = document.getElementById('sp-doc-url'); if(urlField) urlField.value = data.url||'';
-          const nameField = document.getElementById('sp-doc-name'); if(nameField) nameField.value = data.name||f.name;
-          if(statusEl) statusEl.innerHTML = '<span class="file-chip">'+icon('paperclip','icon-sm')+' '+esc(data.name||f.name)+' · '+formatFileSize(f.size)+'</span>';
+          const idField = document.getElementById('sp-doc-id'); if(idField) idField.value = data.id||'';
+          const nameField = document.getElementById('sp-doc-name'); if(nameField) nameField.value = data.nombre||f.name;
+          if(statusEl) statusEl.innerHTML = '<span class="file-chip">'+icon('paperclip','icon-sm')+' '+esc(data.nombre||f.name)+' · '+formatFileSize(f.size)+'</span>';
           if(progressWrap) progressWrap.style.display = 'none';
           toast('Documento subido');
         } else {
