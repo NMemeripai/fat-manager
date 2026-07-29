@@ -419,7 +419,7 @@ let currentPlanillaId = null; // planilla abierta actualmente (vista detalle)
 let planillaViewMode = 'documento'; // 'documento' (estilo Word, solo lectura) | 'form' (edición)
 let session = null;
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
-  sort:{ students:{key:'nombre',dir:'asc'}, rotations:{key:'periodo',dir:'asc'}, documentosAlumno:{key:'fecha',dir:'desc'} },
+  sort:{ students:{key:'legajo',dir:'asc'}, rotations:{key:'periodo',dir:'asc'}, documentosAlumno:{key:'fecha',dir:'desc'} },
   page:{ students:1, rotations:1, documentosAlumno:1 },
   sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
   cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'' };
@@ -649,13 +649,23 @@ function currentWeekOf(student){
   const wk = Math.floor(d/7)+1;
   return Math.max(1, Math.min(wk, DB.config.totalWeeks));
 }
-function rotationsOf(studentId){ return DB.rotations.filter(r=>r.studentId===studentId).sort((a,b)=>a.orden-b.orden); }
+function rotationsOf(studentId){ return DB.rotations.filter(r=>r.studentId===studentId).sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||'')); }
 function currentRotationOf(studentId){
   const rots = rotationsOf(studentId);
   const t = todayISO();
   let cur = rots.find(r=> t>=r.startDate && t<=r.endDate);
   if(!cur) cur = rots.filter(r=>r.status!=='finalizada')[0] || rots[rots.length-1];
   return cur;
+}
+// Única fuente de verdad para "¿está esta rotación en curso HOY?": se calcula siempre
+// a partir de las fechas de inicio/fin, nunca del campo status guardado manualmente
+// (que solo se usa para marcar el cierre/finalización definitiva de una rotación).
+function isRotationCurrentByDate(r){
+  const t = todayISO();
+  return r.status!=='finalizada' && t>=r.startDate && t<=r.endDate;
+}
+function studentsCurrentlyInSection(sectionId){
+  return DB.students.filter(s=> s.estado==='activo' && rotationsOf(s.id).some(r=> r.sectionId===sectionId && isRotationCurrentByDate(r)));
 }
 function sectionName(id){ const s=DB.sections.find(x=>x.id===id); return s?s.nombre:'—'; }
 function groupName(id){ const g=(DB.groups||[]).find(x=>x.id===id); return g?g.nombre:'—'; }
@@ -683,7 +693,7 @@ function computeNotifications(){
   DB.rotations.forEach(r=>{
     const st = DB.students.find(s=>s.id===r.studentId);
     if(!st || st.estado!=='activo') return;
-    if(r.status==='en_curso'){
+    if(isRotationCurrentByDate(r)){
       const wk = currentWeekOf(st);
       const hasReportThisWeek = r.informesSemanales.some(is=>is.semana===wk);
       if(!hasReportThisWeek){
@@ -847,9 +857,9 @@ function renderStudentPortalPage(){
       <div class="section-card">
         <h3>Tu recorrido por secciones</h3>
         <div class="timeline">
-          ${SP.rotaciones.map(r=>{
-            const cls = r.status==='finalizada'?'done':(r.status==='en_curso'?'current':'');
-            const dot = r.status==='finalizada'? icon('check','icon-sm') : r.orden;
+          ${SP.rotaciones.slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||'')).map((r,i)=>{
+            const cls = r.status==='finalizada'?'done':(isRotationCurrentByDate(r)?'current':'');
+            const dot = r.status==='finalizada'? icon('check','icon-sm') : (i+1);
             return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${esc(r.sectionNombre)}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
           }).join('')}
         </div>
@@ -909,14 +919,14 @@ function renderShell(){
       </div>
       <div class="nav">
         ${navItem('teacherHome','clock','Mi semana', ['seccion'])}
-        ${navItem('dashboard','grid','Dashboard')}
-        ${navItem('students','users','Alumnos')}
-        ${navItem('sections','tag','Secciones')}
-        ${navItem('rotations','refresh','Rotaciones')}
-        ${navItem('grades','award','Calificaciones')}
-        ${navItem('pendientes','alertTriangle','Contenidos Pendientes')}
+        ${navItem('dashboard','grid','Dashboard', ['admin','coordinador','viewadmin'])}
+        ${navItem('students','users', session.role==='seccion' ? 'Alumnos asignados' : 'Alumnos')}
+        ${navItem('sections','tag','Secciones', ['admin','coordinador','viewadmin'])}
+        ${navItem('rotations','refresh','Rotaciones', ['admin','coordinador','viewadmin'])}
+        ${navItem('grades','award','Calificaciones', ['admin','coordinador','viewadmin'])}
+        ${navItem('pendientes','alertTriangle','Contenidos Pendientes', ['admin','coordinador','viewadmin'])}
         ${navItem('guidelines','book','Lineamientos')}
-        ${navItem('reports','file','Informes')}
+        ${navItem('reports','file','Informes', ['admin','coordinador','viewadmin'])}
         <div class="nav-section-label">Sistema</div>
         ${navItem('cronograma','calendar','Cronograma de Rotaciones', ['admin','coordinador','viewadmin'])}
         ${navItem('planillas','file','Planillas Digitales FAT', ['admin','seccion','viewadmin'])}
@@ -1029,7 +1039,7 @@ function statCard(label, value, foot, iconName, tone){
 /* ---------------------------- PORTAL PROFESOR: "Mi semana" ---------------------------- */
 function renderTeacherHome(){
   const myRotsAll = DB.rotations.filter(r=>r.teacherId===session.teacherId);
-  const myRotsActive = myRotsAll.filter(r=>r.status==='en_curso');
+  const myRotsActive = myRotsAll.filter(r=>isRotationCurrentByDate(r));
   const mySection = DB.sections.find(s=>s.teacherId===session.teacherId);
   const notifs = computeNotifications().filter(n=> myRotsActive.some(r=> n.sub && n.sub.includes(sectionName(r.sectionId))) );
 
@@ -1103,14 +1113,14 @@ function renderDashboard(){
   const totalProfesores = DB.teachers.filter(t=>t.rol==='seccion').length;
   const activos = DB.students.filter(s=>s.estado==='activo');
   const finalizadas = DB.rotations.filter(r=>r.status==='finalizada').length;
-  const enCurso = DB.rotations.filter(r=>r.status==='en_curso').length;
+  const enCurso = DB.rotations.filter(r=>isRotationCurrentByDate(r)).length;
   const notifs = computeNotifications();
   const informesPend = notifs.filter(n=>n.type==='informe'||n.type==='informe-final').length;
   const notasPend = notifs.filter(n=>n.type==='nota').length;
   const pctFinalizadas = DB.rotations.length ? Math.round(finalizadas/DB.rotations.length*100) : 0;
 
   const bySection = DB.sections.map(sec=>{
-    const count = DB.rotations.filter(r=>r.sectionId===sec.id && r.status==='en_curso').length;
+    const count = studentsCurrentlyInSection(sec.id).length;
     return {name:sec.nombre, count};
   });
   const maxCount = Math.max(1, ...bySection.map(b=>b.count));
@@ -1161,7 +1171,10 @@ function studentSortValue(s, key){
   switch(key){
     case 'nombre': return (s.apellido+' '+s.nombre).toLowerCase();
     case 'curso': return (s.curso+s.division).toLowerCase();
-    case 'legajo': return s.legajo;
+    case 'legajo': {
+      const digits = String(s.legajo||'').match(/\d+/g);
+      return digits && digits.length ? digits.map(d=>d.padStart(10,'0')).join('-') : String(s.legajo||'').toLowerCase();
+    }
     case 'semana': return s.estado==='activo' ? currentWeekOf(s) : -1;
     case 'promedio': return Number(studentAvg(s.id))||-1;
     case 'estado': return s.estado;
@@ -1208,6 +1221,7 @@ function renderPager(table, page, totalPages, total){
 
 function renderStudents(){
   let list = DB.students.slice();
+  if(session.role==='seccion') list = list.filter(s=> DB.rotations.some(r=>r.studentId===s.id && r.teacherId===session.teacherId));
   const f = ui.filters;
   if(ui.search){
     const q = ui.search.toLowerCase();
@@ -1224,7 +1238,7 @@ function renderStudents(){
 
   return `
   <div class="page-head">
-    <div><h1 class="page-title">Alumnos</h1><p class="page-sub">${DB.students.length} alumnos registrados</p></div>
+    <div><h1 class="page-title">${session.role==='seccion'?'Alumnos asignados':'Alumnos'}</h1><p class="page-sub">${list.length} alumno${list.length===1?'':'s'}${session.role==='seccion'?' asignados a tu sección':' registrados'}</p></div>
     ${session.role==='admin'? `<button class="btn btn-primary" data-action="new-student">${icon('plus','icon-sm')} Nuevo alumno</button>`:''}
   </div>
   <div class="filters-row">
@@ -1329,9 +1343,9 @@ function renderStudentDetail(){
   <div class="section-card">
     <h3>Recorrido por secciones</h3>
     <div class="timeline">
-      ${rots.map(r=>{
-        const cls = r.status==='finalizada'?'done':(r.status==='en_curso'?'current':'');
-        const dot = r.status==='finalizada'? icon('check','icon-sm') : r.orden;
+      ${rots.map((r,i)=>{
+        const cls = r.status==='finalizada'?'done':(isRotationCurrentByDate(r)?'current':'');
+        const dot = r.status==='finalizada'? icon('check','icon-sm') : (i+1);
         return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${esc(sectionName(r.sectionId))}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
       }).join('')}
     </div>
@@ -1339,17 +1353,17 @@ function renderStudentDetail(){
 
   <div class="section-card">
     <h3>Historial de rotaciones</h3>
-    ${rots.map(r=>renderRotationBlock(r)).join('')}
+    ${rots.map((r,i)=>renderRotationBlock(r,i+1)).join('')}
   </div>
   `;
 }
 
-function renderRotationBlock(r){
+function renderRotationBlock(r, displayNum){
   const editable = isRotationEditableBy(r);
   return `
   <div style="border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:12px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
-      <div style="font-weight:700; font-size:13.5px;">${r.orden}. ${esc(sectionName(r.sectionId))} <span class="cell-muted" style="font-weight:500;">· ${esc(teacherName(r.teacherId))}</span></div>
+      <div style="font-weight:700; font-size:13.5px;">${displayNum}. ${esc(sectionName(r.sectionId))} <span class="cell-muted" style="font-weight:500;">· ${esc(teacherName(r.teacherId))}</span></div>
       <div style="display:flex; gap:8px; align-items:center;">
         ${statusBadge(r.status)}
         ${rotationAvg(r)!=null? `<span class="badge badge-accent">Promedio: ${rotationAvg(r).toFixed(1)}</span>`:''}
@@ -1380,7 +1394,7 @@ function renderSections(){
   </div>
   <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));">
     ${sorted.map((sec,idx)=>{
-      const count = DB.rotations.filter(r=>r.sectionId===sec.id && r.status==='en_curso').length;
+      const enCurso = studentsCurrentlyInSection(sec.id);
       return `<div class="card">
         <div style="display:flex; justify-content:space-between; align-items:flex-start;">
           <div>
@@ -1394,8 +1408,9 @@ function renderSections(){
             <button class="btn btn-ghost btn-sm" data-action="delete-section" data-id="${sec.id}">${icon('trash','icon-sm')}</button>
           </div>`:''}
         </div>
-        <div class="stat-value" style="margin-top:12px;">${count}</div>
-        <div class="stat-foot">alumnos en curso ahora</div>
+        <div class="stat-value" style="margin-top:12px;">${enCurso.length}</div>
+        <div class="stat-foot">alumno${enCurso.length===1?'':'s'} en curso ahora</div>
+        ${enCurso.length? `<ul class="mono-list" style="margin-top:10px;">${enCurso.map(s=>`<li style="cursor:pointer;" data-action="open-student" data-id="${s.id}"><span>${esc(s.nombre)} ${esc(s.apellido)}</span><span class="cell-muted">${esc(s.curso)} "${esc(s.division)}"</span></li>`).join('')}</ul>` : ''}
       </div>`;
     }).join('')}
     ${!sorted.length? `<div class="empty-state" style="grid-column:1/-1;"><div class="em-icon">${icon('tag')}</div><div class="em-title">Todavía no hay secciones</div>${session.role==='admin'?'Creá la primera para poder dar de alta alumnos.':''}</div>` : ''}
@@ -1724,6 +1739,7 @@ function renderCronograma(){
                 ? `<td class="cron-cell cron-cell-empty cron-cell-addable" data-action="cron-add" data-student-id="${s.id}" data-week-start="${weekStart}" data-week-end="${weekEnd}" title="Semana ${n} (${fmtDate(weekStart)}) · Sin rotación asignada — clic para crear una">+</td>`
                 : `<td class="cron-cell cron-cell-empty"></td>`;
             }
+            const esHoy = isRotationCurrentByDate(rot) && weekStart<=todayISO() && todayISO()<=weekEnd;
             const color = sectionColor(rot.sectionId);
             const asis = attendanceSummaryFor(s.id, weekStart, weekEnd);
             let indicator = '';
@@ -1732,8 +1748,8 @@ function renderCronograma(){
               else if(asis.presentes===0){ indicator = `<span class="cron-attend-dot cron-attend-bad" title="No asistió ningún día registrado esta semana">${icon('x','icon-sm')}</span>`; }
               else{ indicator = `<span class="cron-attend-dot cron-attend-warn" title="${asis.ausentes} inasistencia(s) esta semana"></span>`; }
             }
-            return `<td class="cron-cell" style="background:${color}22;" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" data-week-num="${n}" data-week-start="${weekStart}" data-week-end="${weekEnd}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)}) · ${esc(sectionName(rot.sectionId))}${rot.empresa?' · '+esc(rot.empresa):''} · ${esc(teacherName(rot.teacherId))}${asis.total?' · '+asis.presentes+' presente(s), '+asis.ausentes+' ausencia(s)':''}">
-              <div class="cron-cell-bar" style="background:${color};">${indicator}</div>
+            return `<td class="cron-cell${esHoy?' cron-cell-today':''}" style="background:${color}22;${esHoy?' box-shadow:inset 0 0 0 2px var(--accent);':''}" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" data-week-num="${n}" data-week-start="${weekStart}" data-week-end="${weekEnd}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)})${esHoy?' · En curso hoy':''} · ${esc(sectionName(rot.sectionId))}${rot.empresa?' · '+esc(rot.empresa):''} · ${esc(teacherName(rot.teacherId))}${asis.total?' · '+asis.presentes+' presente(s), '+asis.ausentes+' ausencia(s)':''}">
+              <div class="cron-cell-bar" style="background:${color};">${indicator}${esHoy?`<span class="badge badge-accent" style="position:absolute; top:2px; right:2px; font-size:9px; padding:1px 5px;">Hoy</span>`:''}</div>
             </td>`;
           }).join('')}
         </tr>`;
@@ -3212,9 +3228,9 @@ function exportStudentPDF(studentId){
   let y = 18;
   doc.setFontSize(16); doc.text('Informe FAT — '+s.nombre+' '+s.apellido, 14, y); y+=8;
   doc.setFontSize(10); doc.text('Legajo: '+s.legajo+'   DNI: '+s.dni+'   Curso: '+s.curso+' "'+s.division+'"', 14, y); y+=10;
-  rotationsOf(s.id).forEach(r=>{
+  rotationsOf(s.id).forEach((r,idx)=>{
     if(y>260){ doc.addPage(); y=18; }
-    doc.setFontSize(12); doc.text(r.orden+'. '+sectionName(r.sectionId)+' ('+fmtDate(r.startDate)+' - '+fmtDate(r.endDate)+')', 14, y); y+=6;
+    doc.setFontSize(12); doc.text((idx+1)+'. '+sectionName(r.sectionId)+' ('+fmtDate(r.startDate)+' - '+fmtDate(r.endDate)+')', 14, y); y+=6;
     doc.setFontSize(9);
     const lines = [
       'Profesor: '+teacherName(r.teacherId)+'   Estado: '+r.status+'   Promedio: '+(rotationAvg(r)==null?'-':rotationAvg(r).toFixed(1)),
