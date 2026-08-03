@@ -221,7 +221,8 @@ app.get('/api/state', auth, h(async (req, res) => {
   if (req.user.role === 'seccion') {
     comunicados = comunicados.filter(c => comunicadoVisibleParaProfesor(c, req.user.teacherId)).map(c => comunicadoParaProfesor(c, req.user.teacherId));
   }
-  res.json({ config, teachers, sections, students, rotations, consignas, objetivos, groups, pendientes, activityLog, users, comunicados });
+  const cronogramaActividades = ['admin', 'coordinador', 'viewadmin'].includes(req.user.role) ? await allDocs('cronogramaActividades') : [];
+  res.json({ config, teachers, sections, students, rotations, consignas, objetivos, groups, pendientes, activityLog, users, comunicados, cronogramaActividades });
 }));
 
 /* ---------------------------- students ---------------------------- */
@@ -724,6 +725,40 @@ app.post('/api/comunicados/:id/leido', auth, requireRole('seccion'), h(async (re
 
 app.delete('/api/comunicados/:id', auth, requireRole('admin'), h(async (req, res) => {
   await db.collection('comunicados').doc(req.params.id).delete();
+  res.json({ ok: true });
+}));
+
+/* ---------------------------- Cronograma de Actividades ----------------------------
+   Módulo NUEVO e independiente del Cronograma de Rotaciones: registra actividades
+   puntuales por día (sección, horario, observaciones), sin tocar la colección
+   "rotations" ni sus datos ya cargados. */
+app.post('/api/cronograma-actividades', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
+  const { fecha, sectionId, horaInicio, horaFin, observaciones } = req.body || {};
+  if (!fecha || !sectionId) return res.status(400).json({ error: 'Fecha y sección son obligatorias' });
+  const id = uid('act');
+  const record = {
+    fecha, sectionId, horaInicio: horaInicio || null, horaFin: horaFin || null, observaciones: observaciones || '',
+    createdBy: req.user.sub, createdByNombre: req.user.nombre, createdAt: new Date().toISOString()
+  };
+  await db.collection('cronogramaActividades').doc(id).set(record);
+  res.status(201).json({ id, ...record });
+}));
+
+app.put('/api/cronograma-actividades/:id', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
+  const a = await docData('cronogramaActividades', req.params.id);
+  if (!a) return res.status(404).json({ error: 'Actividad no encontrada' });
+  const { fecha, sectionId, horaInicio, horaFin, observaciones } = req.body || {};
+  await db.collection('cronogramaActividades').doc(req.params.id).update({
+    fecha: fecha || a.fecha, sectionId: sectionId || a.sectionId,
+    horaInicio: horaInicio !== undefined ? (horaInicio || null) : a.horaInicio,
+    horaFin: horaFin !== undefined ? (horaFin || null) : a.horaFin,
+    observaciones: observaciones !== undefined ? observaciones : a.observaciones
+  });
+  res.json({ ok: true });
+}));
+
+app.delete('/api/cronograma-actividades/:id', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
+  await db.collection('cronogramaActividades').doc(req.params.id).delete();
   res.json({ ok: true });
 }));
 
