@@ -109,6 +109,12 @@ function extOf(filename) {
   const i = filename.lastIndexOf('.');
   return i >= 0 ? filename.slice(i).toLowerCase() : '';
 }
+function formatoOf(ext) {
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.doc' || ext === '.docx') return 'word';
+  if (ext === '.xls' || ext === '.xlsx') return 'excel';
+  return 'otro';
+}
 
 app.post('/api/documentos', auth, upload.single('file'), h(async (req, res) => {
   if (!['admin', 'seccion', 'alumno'].includes(req.user.role)) return res.status(403).json({ error: 'No tenés permiso para subir documentos' });
@@ -117,12 +123,13 @@ app.post('/api/documentos', auth, upload.single('file'), h(async (req, res) => {
   if (!ALLOWED_DOC_EXT.includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Solo se aceptan .pdf, .doc, .docx, .xls y .xlsx' });
   if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
 
-  let tipo, studentId = null, curso = null;
+  let tipo, studentId = null, curso = null, groupId = null;
   if (req.user.role === 'alumno') {
     tipo = 'alumno';
     studentId = req.user.studentId;
     const st = await docData('students', studentId);
     curso = st ? (st.curso + ' "' + st.division + '"') : null;
+    groupId = st ? (st.groupId || null) : null;
   } else if (req.user.role === 'seccion') {
     tipo = 'mep';
     studentId = req.body.studentId || null;
@@ -144,9 +151,12 @@ app.post('/api/documentos', auth, upload.single('file'), h(async (req, res) => {
   const docRecord = {
     tipo, nombre: req.file.originalname, url: result.secure_url,
     uploadedBy: req.user.sub, uploadedByNombre: req.user.nombre, uploadedByRole: req.user.role,
-    studentId, curso, observaciones: req.body.observaciones || '',
+    studentId, curso, groupId, observaciones: req.body.observaciones || '',
     fecha: now.toISOString().slice(0, 10), hora: now.toTimeString().slice(0, 5),
-    createdAt: now.toISOString()
+    createdAt: now.toISOString(),
+    tamano: req.file.size, formato: formatoOf(ext),
+    semana: null, rotationId: null, sectionId: null,
+    estado: req.user.role === 'alumno' ? 'en_progreso' : 'entregado'
   };
   await db.collection('documentos').doc(id).set(docRecord);
   await logActivity(`${req.user.nombre} subió el documento "${req.file.originalname}".`);
@@ -276,12 +286,12 @@ app.delete('/api/students/:id', auth, requireRole('admin'), h(async (req, res) =
 
 /* ---------------------------- sections (dinámicas: crear, editar, eliminar, reordenar) ---------------------------- */
 app.post('/api/sections', auth, requireRole('admin'), h(async (req, res) => {
-  const { nombre, teacherId, weeks } = req.body || {};
+  const { nombre, teacherId, weeks, color } = req.body || {};
   if (!nombre) return res.status(400).json({ error: 'El nombre de la sección es obligatorio' });
   const existing = await getSectionsOrdered();
   const id = uid('s');
   await db.collection('sections').doc(id).set({
-    nombre, teacherId: teacherId || null, orden: existing.length + 1, weeks: Number(weeks) || 5
+    nombre, teacherId: teacherId || null, orden: existing.length + 1, weeks: Number(weeks) || 5, color: color || null
   });
   await recomputeTotalWeeks();
   await logActivity(`Se creó la sección ${nombre}.`);
@@ -291,9 +301,10 @@ app.post('/api/sections', auth, requireRole('admin'), h(async (req, res) => {
 app.put('/api/sections/:id', auth, requireRole('admin'), h(async (req, res) => {
   const sec = await docData('sections', req.params.id);
   if (!sec) return res.status(404).json({ error: 'Sección no encontrada' });
-  const { nombre, teacherId, weeks } = req.body || {};
+  const { nombre, teacherId, weeks, color } = req.body || {};
   await db.collection('sections').doc(req.params.id).update({
-    nombre, teacherId: teacherId || null, weeks: weeks != null ? (Number(weeks) || 5) : (sec.weeks || 5)
+    nombre, teacherId: teacherId || null, weeks: weeks != null ? (Number(weeks) || 5) : (sec.weeks || 5),
+    color: color !== undefined ? (color || null) : (sec.color || null)
   });
   const rots = await whereEquals('rotations', 'sectionId', req.params.id);
   const batch = db.batch();
@@ -668,7 +679,8 @@ app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
   const rotationsSummary = await Promise.all(rotations.map(async r => {
     const section = await docData('sections', r.sectionId);
     return {
-      id: r.id, orden: r.orden, sectionNombre: section ? section.nombre : '—',
+      id: r.id, orden: r.orden, sectionId: r.sectionId, sectionNombre: section ? section.nombre : '—',
+      sectionColor: section ? (section.color || null) : null,
       startDate: r.startDate, endDate: r.endDate, status: r.status
     };
   }));
@@ -707,10 +719,26 @@ function currentWeekOfDate(student, config, dateISO) {
 app.post('/api/mi-portal/respuesta', auth, requireRole('alumno'), h(async (req, res) => {
   const studentId = req.user.studentId;
   if (!studentId) return res.status(400).json({ error: 'Esta cuenta no está vinculada a ningún alumno' });
-  const { rotationId, semana, leido, actividadRealizada, observacion } = req.body || {};
+  const { rotationId, semana, leido, actividadRealizada, observacion, documentoId } = req.body || {};
   const r = await docData('rotations', rotationId);
   if (!r || r.studentId !== studentId) return res.status(403).json({ error: 'No podés responder sobre una rotación que no es tuya' });
-  const nuevo = { semana, leido: !!leido, actividadRealizada: !!actividadRealizada, observacion: observacion || '', fecha: todayISO() };
+
+  let documentoNombre = null;
+  if (documentoId) {
+    const doc = await docData('documentos', documentoId);
+    if (!doc || doc.uploadedBy !== req.user.sub || doc.studentId !== studentId) {
+      return res.status(403).json({ error: 'El documento adjunto no es válido' });
+    }
+    await db.collection('documentos').doc(documentoId).update({
+      semana, rotationId, sectionId: r.sectionId, estado: 'entregado'
+    });
+    documentoNombre = doc.nombre;
+  }
+
+  const nuevo = {
+    semana, leido: !!leido, actividadRealizada: !!actividadRealizada, observacion: observacion || '',
+    fecha: todayISO(), documentoId: documentoId || null, documentoNombre
+  };
   const existingList = r.respuestasAlumno || [];
   const existingIdx = existingList.findIndex(e => e.semana === semana);
   const respuestasAlumno = existingIdx >= 0
