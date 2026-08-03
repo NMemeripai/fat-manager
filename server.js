@@ -204,25 +204,41 @@ app.get('/api/mis-documentos', auth, h(async (req, res) => {
 
 app.get('/api/state', auth, h(async (req, res) => {
   if (req.user.role === 'alumno') return res.status(403).json({ error: 'Los alumnos no tienen acceso a este recurso' });
-  const cfgSnap = await db.collection('config').doc('main').get();
-  const config = cfgSnap.data();
-  const teachers = await allDocs('teachers');
-  const sections = (await allDocs('sections')).sort((a, b) => a.orden - b.orden);
-  const students = await allDocs('students');
-  const rotations = await allDocs('rotations');
-  const consignas = await allDocs('consignas');
-  const objetivos = await allDocs('objetivos');
-  const groups = await allDocs('groups');
-  const pendientes = await allDocs('pendientes');
-  const activityLog = await getActivityLog(40);
-  const users = (await allDocs('users')).map(u => ({ id: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId, sectionId: u.sectionId, studentId: u.studentId || null }));
-  let comunicados = await allDocs('comunicados');
-  comunicados.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-  if (req.user.role === 'seccion') {
-    comunicados = comunicados.filter(c => comunicadoVisibleParaProfesor(c, req.user.teacherId)).map(c => comunicadoParaProfesor(c, req.user.teacherId));
+  // Soporte de recarga parcial: ?only=rotations,students trae solo esas colecciones
+  // (ahorra lecturas de Firestore evitando releer las 11 colecciones en cada acción).
+  // Sin el parámetro "only", el comportamiento es idéntico al de antes (trae todo).
+  const only = req.query.only ? String(req.query.only).split(',').map(s => s.trim()).filter(Boolean) : null;
+  const wants = key => !only || only.includes(key);
+
+  const result = {};
+  if (wants('config')) {
+    const cfgSnap = await db.collection('config').doc('main').get();
+    result.config = cfgSnap.data();
   }
-  const cronogramaActividades = ['admin', 'coordinador', 'viewadmin'].includes(req.user.role) ? await allDocs('cronogramaActividades') : [];
-  res.json({ config, teachers, sections, students, rotations, consignas, objetivos, groups, pendientes, activityLog, users, comunicados, cronogramaActividades });
+  if (wants('teachers')) result.teachers = await allDocs('teachers');
+  if (wants('sections')) result.sections = (await allDocs('sections')).sort((a, b) => a.orden - b.orden);
+  if (wants('students')) result.students = await allDocs('students');
+  if (wants('rotations')) result.rotations = await allDocs('rotations');
+  if (wants('consignas')) result.consignas = await allDocs('consignas');
+  if (wants('objetivos')) result.objetivos = await allDocs('objetivos');
+  if (wants('groups')) result.groups = await allDocs('groups');
+  if (wants('pendientes')) result.pendientes = await allDocs('pendientes');
+  if (wants('activityLog')) result.activityLog = await getActivityLog(40);
+  if (wants('users')) {
+    result.users = (await allDocs('users')).map(u => ({ id: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId, sectionId: u.sectionId, studentId: u.studentId || null }));
+  }
+  if (wants('comunicados')) {
+    let comunicados = await allDocs('comunicados');
+    comunicados.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    if (req.user.role === 'seccion') {
+      comunicados = comunicados.filter(c => comunicadoVisibleParaProfesor(c, req.user.teacherId)).map(c => comunicadoParaProfesor(c, req.user.teacherId));
+    }
+    result.comunicados = comunicados;
+  }
+  if (wants('cronogramaActividades')) {
+    result.cronogramaActividades = ['admin', 'coordinador', 'viewadmin'].includes(req.user.role) ? await allDocs('cronogramaActividades') : [];
+  }
+  res.json(result);
 }));
 
 /* ---------------------------- students ---------------------------- */
@@ -733,12 +749,11 @@ app.delete('/api/comunicados/:id', auth, requireRole('admin'), h(async (req, res
    puntuales por día (sección, horario, observaciones), sin tocar la colección
    "rotations" ni sus datos ya cargados. */
 app.post('/api/cronograma-actividades', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
-  const { fecha, sectionId, horaInicio, horaFin, observaciones, studentId } = req.body || {};
+  const { fecha, sectionId, horaInicio, horaFin, observaciones } = req.body || {};
   if (!fecha || !sectionId) return res.status(400).json({ error: 'Fecha y sección son obligatorias' });
   const id = uid('act');
   const record = {
     fecha, sectionId, horaInicio: horaInicio || null, horaFin: horaFin || null, observaciones: observaciones || '',
-    studentId: studentId || null,
     createdBy: req.user.sub, createdByNombre: req.user.nombre, createdAt: new Date().toISOString()
   };
   await db.collection('cronogramaActividades').doc(id).set(record);
@@ -748,13 +763,12 @@ app.post('/api/cronograma-actividades', auth, requireRole('admin', 'coordinador'
 app.put('/api/cronograma-actividades/:id', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
   const a = await docData('cronogramaActividades', req.params.id);
   if (!a) return res.status(404).json({ error: 'Actividad no encontrada' });
-  const { fecha, sectionId, horaInicio, horaFin, observaciones, studentId } = req.body || {};
+  const { fecha, sectionId, horaInicio, horaFin, observaciones } = req.body || {};
   await db.collection('cronogramaActividades').doc(req.params.id).update({
     fecha: fecha || a.fecha, sectionId: sectionId || a.sectionId,
     horaInicio: horaInicio !== undefined ? (horaInicio || null) : a.horaInicio,
     horaFin: horaFin !== undefined ? (horaFin || null) : a.horaFin,
-    observaciones: observaciones !== undefined ? observaciones : a.observaciones,
-    studentId: studentId !== undefined ? (studentId || null) : (a.studentId || null)
+    observaciones: observaciones !== undefined ? observaciones : a.observaciones
   });
   res.json({ ok: true });
 }));
