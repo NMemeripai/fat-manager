@@ -539,8 +539,15 @@ async function apiFetch(method, url, body){
 function pushActivity(){ /* el registro de actividad ahora lo genera el servidor en cada operación */ }
 
 /* ---------------------------- persistence: carga el estado real desde el servidor ---------------------------- */
-async function loadDB(){
-  DB = await apiFetch('GET', '/api/state');
+async function loadDB(only){
+  // Si se pasa "only" (array de nombres de colección), solo se recargan esas —
+  // el resto del estado en memoria se mantiene tal cual. Ahorra lecturas de Firestore
+  // en cada acción, en vez de releer las 11 colecciones completas cada vez.
+  // Sin argumento, trae todo (comportamiento original: uso en login/init).
+  const qs = (only && only.length) ? ('?only=' + only.join(',')) : '';
+  const data = await apiFetch('GET', '/api/state' + qs);
+  if(!DB || !qs) DB = data;
+  else Object.assign(DB, data);
 }
 async function loadStudentPortal(){
   SP = await apiFetch('GET', '/api/mi-portal');
@@ -2985,7 +2992,7 @@ function attachGlobalEvents(){
     if(!rotId || !newSectionId) return;
     try{
       await apiFetch('PUT', '/api/rotations/'+rotId+'/schedule', { sectionId: newSectionId });
-      await loadDB(); render(); toast('Rotación reasignada de sección');
+      await loadDB(['rotations','activityLog']); render(); toast('Rotación reasignada de sección');
     }catch(e2){ toast(e2.message||'No se pudo reasignar', 'red'); }
   });
 
@@ -3046,7 +3053,7 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{
           try{
             await apiFetch('DELETE', '/api/students/'+id);
-            await loadDB(); ui.view='students'; toast('Alumno eliminado');
+            await loadDB(['students','rotations','users','activityLog']); ui.view='students'; toast('Alumno eliminado');
           }catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
         }
       });
@@ -3063,7 +3070,7 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{
           try{
             await apiFetch('DELETE', '/api/sections/'+id+'?force=true');
-            await loadDB(); toast('Sección eliminada');
+            await loadDB(['sections','rotations','config','activityLog']); toast('Sección eliminada');
           }catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
         }
       });
@@ -3077,7 +3084,7 @@ function attachGlobalEvents(){
       const tmp = sorted[idx]; sorted[idx]=sorted[swapWith]; sorted[swapWith]=tmp;
       try{
         await apiFetch('PUT', '/api/sections-order', { order: sorted.map(s=>s.id) });
-        await loadDB(); render();
+        await loadDB(['sections','activityLog']); render();
       }catch(e){ toast(e.message||'No se pudo reordenar', 'red'); }
     }
     else if(action==='new-group'){ ui.modal={type:'group-form', data:null}; render(); }
@@ -3092,7 +3099,7 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{
           try{
             await apiFetch('DELETE', '/api/groups/'+id);
-            await loadDB(); toast('Grupo eliminado');
+            await loadDB(['groups','students','activityLog']); toast('Grupo eliminado');
           }catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
         }
       });
@@ -3115,7 +3122,7 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{
           try{
             await apiFetch('DELETE','/api/cronograma-actividades/'+id);
-            await loadDB();
+            await loadDB(['cronogramaActividades']);
             const fresh = DB.rotations.find(r=>r.id===ui.modal.data.id);
             if(fresh) ui.modal.data = { ...fresh, _weekStart:ui.modal.data._weekStart, _weekEnd:ui.modal.data._weekEnd, _weekNum:ui.modal.data._weekNum };
             render();
@@ -3134,7 +3141,7 @@ function attachGlobalEvents(){
       try{
         if(editingId) await apiFetch('PUT','/api/cronograma-actividades/'+editingId, {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
         else await apiFetch('POST','/api/cronograma-actividades', {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
-        await loadDB();
+        await loadDB(['cronogramaActividades']);
         const fresh = DB.rotations.find(r=>r.id===rotId);
         if(fresh) ui.modal.data = { ...fresh, _weekStart:ui.modal.data._weekStart, _weekEnd:ui.modal.data._weekEnd, _weekNum:ui.modal.data._weekNum, _editingExcepcionId:null };
         render();
@@ -3147,7 +3154,7 @@ function attachGlobalEvents(){
         message:'¿Eliminar esta rotación del cronograma? Se perderán los informes semanales y datos cargados en ella. Esta acción no se puede deshacer.',
         confirmLabel:'Eliminar', danger:true,
         onConfirm: async ()=>{
-          try{ await apiFetch('DELETE','/api/rotations/'+id); ui.modal=null; await loadDB(); render(); toast('Rotación eliminada'); }
+          try{ await apiFetch('DELETE','/api/rotations/'+id); ui.modal=null; await loadDB(['rotations','activityLog']); render(); toast('Rotación eliminada'); }
           catch(e){ toast(e.message||'No se pudo eliminar','red'); }
         }
       });
@@ -3160,7 +3167,7 @@ function attachGlobalEvents(){
         message:'¿Está seguro que desea eliminar esta rotación de '+nombre+'? Esta acción no se puede deshacer, y también desaparecerá del Cronograma de Rotaciones.',
         confirmLabel:'Eliminar', danger:true,
         onConfirm: async ()=>{
-          try{ await apiFetch('DELETE','/api/rotations/'+id); await loadDB(); render(); toast('Rotación eliminada'); }
+          try{ await apiFetch('DELETE','/api/rotations/'+id); await loadDB(['rotations','activityLog']); render(); toast('Rotación eliminada'); }
           catch(e){ toast(e.message||'No se pudo eliminar','red'); }
         }
       });
@@ -3216,7 +3223,7 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{
           try{
             await apiFetch('DELETE', '/api/teachers/'+id);
-            await loadDB(); toast('Profesor eliminado');
+            await loadDB(['teachers','users','activityLog']); toast('Profesor eliminado');
           }catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
         }
       });
@@ -3284,21 +3291,21 @@ function attachGlobalEvents(){
     else if(action==='quick-week'){ ui.modal={type:'quick-week-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
     else if(action==='save-nota-aprobacion'){
       const n = Number(document.getElementById('cfg-nota-aprobacion').value);
-      try{ await apiFetch('PUT','/api/config',{notaAprobacion:n}); await loadDB(); render(); toast('Nota de aprobación actualizada'); }
+      try{ await apiFetch('PUT','/api/config',{notaAprobacion:n}); await loadDB(['config','activityLog']); render(); toast('Nota de aprobación actualizada'); }
       catch(e){ toast(e.message||'No se pudo guardar','red'); }
     }
-    else if(action==='del-consigna'){ try{ await apiFetch('DELETE','/api/consignas/'+id); await loadDB(); render(); }catch(e){ toast(e.message||'Error','red'); } }
-    else if(action==='del-objetivo'){ try{ await apiFetch('DELETE','/api/objetivos/'+id); await loadDB(); render(); }catch(e){ toast(e.message||'Error','red'); } }
+    else if(action==='del-consigna'){ try{ await apiFetch('DELETE','/api/consignas/'+id); await loadDB(['consignas']); render(); }catch(e){ toast(e.message||'Error','red'); } }
+    else if(action==='del-objetivo'){ try{ await apiFetch('DELETE','/api/objetivos/'+id); await loadDB(['objetivos']); render(); }catch(e){ toast(e.message||'Error','red'); } }
     else if(action==='new-comunicado'){ ui.modal={type:'comunicado-form', data:null}; render(); }
     else if(action==='ver-comunicado'){ ui.modal={type:'comunicado-detalle', data:(DB.comunicados||[]).find(c=>c.id===id)}; render(); }
     else if(action==='abrir-comunicado'){
-      try{ await apiFetch('POST','/api/comunicados/'+id+'/leido',{}); await loadDB(); render(); }
+      try{ await apiFetch('POST','/api/comunicados/'+id+'/leido',{}); await loadDB(['comunicados']); render(); }
       catch(e){ toast(e.message||'No se pudo marcar como leído','red'); }
     }
     else if(action==='delete-comunicado'){
       askConfirm({
         title:'Eliminar lineamiento', message:'¿Eliminar este lineamiento? Los profesores ya no podrán verlo.', confirmLabel:'Eliminar', danger:true,
-        onConfirm: async ()=>{ try{ await apiFetch('DELETE','/api/comunicados/'+id); await loadDB(); toast('Lineamiento eliminado'); }catch(e){ toast(e.message||'Error','red'); } }
+        onConfirm: async ()=>{ try{ await apiFetch('DELETE','/api/comunicados/'+id); await loadDB(['comunicados']); toast('Lineamiento eliminado'); }catch(e){ toast(e.message||'Error','red'); } }
       });
     }
     else if(action==='cronograma-tab'){ ui.cronogramaTab = t.getAttribute('data-tab'); render(); }
@@ -3315,7 +3322,7 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{
           try{
             const r = await apiFetch('POST','/api/cronograma-actividades/generar', {desde, hasta});
-            await loadDB(); render();
+            await loadDB(['cronogramaActividades']); render();
             toast(r.creadas? r.creadas+' actividad(es) generada(s) desde Rotaciones' : 'Ya estaba todo generado, no había nada nuevo');
           }catch(e){ toast(e.message||'No se pudo generar','red'); }
         }
@@ -3333,7 +3340,7 @@ function attachGlobalEvents(){
       askConfirm({
         title:'Eliminar actividad', message:'¿Eliminar esta actividad del día?', confirmLabel:'Eliminar', danger:true,
         onConfirm: async ()=>{
-          try{ await apiFetch('DELETE','/api/cronograma-actividades/'+id); await loadDB(); render(); toast('Actividad eliminada'); }
+          try{ await apiFetch('DELETE','/api/cronograma-actividades/'+id); await loadDB(['cronogramaActividades']); render(); toast('Actividad eliminada'); }
           catch(e){ toast(e.message||'Error','red'); }
         }
       });
@@ -3349,7 +3356,7 @@ function attachGlobalEvents(){
       try{
         if(editingId) await apiFetch('PUT','/api/cronograma-actividades/'+editingId, {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
         else await apiFetch('POST','/api/cronograma-actividades', {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
-        await loadDB();
+        await loadDB(['cronogramaActividades']);
         ui.modal={type:'actividad-dia-editor', data:{fecha}};
         render();
         toast(editingId? 'Actividad actualizada':'Actividad agregada');
@@ -3426,7 +3433,7 @@ function attachGlobalEvents(){
     }
     else if(t.matches('[data-action="pendiente-estado"]')){
       const id = t.getAttribute('data-id'); const estado = t.value;
-      apiFetch('PUT', '/api/pendientes/'+id, { estado }).then(async ()=>{ await loadDB(); render(); toast('Estado actualizado'); }).catch(e=> toast(e.message||'No se pudo actualizar', 'red'));
+      apiFetch('PUT', '/api/pendientes/'+id, { estado }).then(async ()=>{ await loadDB(['pendientes']); render(); toast('Estado actualizado'); }).catch(e=> toast(e.message||'No se pudo actualizar', 'red'));
     }
     else if(t.id==='f-doc-file'){
       const f = t.files && t.files[0];
@@ -3534,7 +3541,7 @@ async function addInformeSemanal(rotId){
       semana:sem, texto, fecha, nota: notaVal===''? null : Number(notaVal), ausente,
       motivo: ausente? 'Ausente en la semana '+sem : undefined
     });
-    await loadDB();
+    await loadDB(['rotations','pendientes','activityLog']);
     ui.modal = {type:'rotation-form', data:DB.rotations.find(r=>r.id===rotId)};
     render();
     toast('Registro semanal agregado');
@@ -3635,7 +3642,7 @@ async function uploadComunicado(){
       xhr.send(fd);
     });
     ui.modal = null;
-    await loadDB();
+    await loadDB(['comunicados','activityLog']);
     render();
     toast('Lineamiento enviado correctamente');
   }catch(e){
@@ -3661,7 +3668,7 @@ async function submitModal(action, type, id){
         await apiFetch('POST', '/api/students', data);
         toast('Alumno creado con sus rotaciones');
       }
-      await loadDB(); ui.modal=null; render();
+      await loadDB(['students','rotations','users','activityLog']); ui.modal=null; render();
     }
     else if(type==='section-form'){
       const nombre = val('f-sec-nombre'); const teacherId = val('f-sec-teacher')||null; const weeks = Number(val('f-sec-weeks'))||5;
@@ -3669,14 +3676,14 @@ async function submitModal(action, type, id){
       if(!nombre){ toast('Ponele un nombre a la sección','red'); return; }
       if(id) await apiFetch('PUT', '/api/sections/'+id, { nombre, teacherId, weeks, color });
       else await apiFetch('POST', '/api/sections', { nombre, teacherId, weeks, color });
-      await loadDB(); ui.modal=null; render(); toast(id? 'Sección actualizada':'Sección creada');
+      await loadDB(['sections','rotations','config','activityLog']); ui.modal=null; render(); toast(id? 'Sección actualizada':'Sección creada');
     }
     else if(type==='group-form'){
       const nombre = val('f-grupo-nombre');
       if(!nombre){ toast('Ponele un nombre al grupo','red'); return; }
       if(id) await apiFetch('PUT', '/api/groups/'+id, { nombre });
       else await apiFetch('POST', '/api/groups', { nombre });
-      await loadDB(); ui.modal=null; render(); toast(id? 'Grupo actualizado':'Grupo creado');
+      await loadDB(['groups','activityLog']); ui.modal=null; render(); toast(id? 'Grupo actualizado':'Grupo creado');
     }
     else if(type==='teacher-form'){
       const nombre = val('f-t-nombre'); const rol = val('f-t-rol'); const sectionId = val('f-t-seccion')||null;
@@ -3685,7 +3692,7 @@ async function submitModal(action, type, id){
       if(!id && !password){ toast('La contraseña es obligatoria para un profesor nuevo','red'); return; }
       if(id) await apiFetch('PUT', '/api/teachers/'+id, { nombre, rol, sectionId, username, password: password||undefined });
       else await apiFetch('POST', '/api/teachers', { nombre, rol, sectionId, username, password });
-      await loadDB(); ui.modal=null; render(); toast('Profesor guardado');
+      await loadDB(['teachers','users','sections','activityLog']); ui.modal=null; render(); toast('Profesor guardado');
     }
     else if(type==='rotation-form'){
       const payload = {
@@ -3694,29 +3701,29 @@ async function submitModal(action, type, id){
         status: val('f-r-status'), attachmentName: val('f-r-file-name')||undefined, attachmentUrl: val('f-r-file-url')||undefined
       };
       await apiFetch('PUT', '/api/rotations/'+id, payload);
-      await loadDB(); ui.modal=null; render(); toast('Rotación actualizada');
+      await loadDB(['rotations','pendientes','activityLog']); ui.modal=null; render(); toast('Rotación actualizada');
     }
     else if(type==='guidelines-form'){
       await apiFetch('PUT', '/api/guidelines', { lineamientos: val('f-lineamientos') });
-      await loadDB(); ui.modal=null; render(); toast('Lineamientos publicados');
+      await loadDB(['config','activityLog']); ui.modal=null; render(); toast('Lineamientos publicados');
     }
     else if(type==='consigna-form'){
       const texto = val('f-consigna');
       if(texto) await apiFetch('POST', '/api/consignas', { texto });
-      await loadDB(); ui.modal=null; render();
+      await loadDB(['consignas','activityLog']); ui.modal=null; render();
     }
     else if(type==='objetivo-form'){
       const sem = Number(val('f-obj-semana'))||1;
       const texto = val('f-obj-texto');
       if(texto) await apiFetch('POST', '/api/objetivos', { semana:sem, texto });
-      await loadDB(); ui.modal=null; render();
+      await loadDB(['objetivos','activityLog']); ui.modal=null; render();
     }
     else if(type==='pendiente-form'){
       const sectionId = val('f-pend-seccion'); const studentId = val('f-pend-alumno');
       const semana = val('f-pend-semana'); const motivo = val('f-pend-motivo'); const contenido = val('f-pend-contenido');
       if(!studentId || !sectionId || !motivo){ toast('Completá alumno, sección y motivo','red'); return; }
       await apiFetch('POST', '/api/pendientes', { studentId, sectionId, semana: semana?Number(semana):null, motivo, contenido });
-      await loadDB(); ui.modal=null; render(); toast('Registro creado');
+      await loadDB(['pendientes','activityLog']); ui.modal=null; render(); toast('Registro creado');
     }
     else if(type==='planilla-form'){
       const studentId = val('f-pln-alumno'); const sectionId = val('f-pln-seccion');
@@ -3749,7 +3756,7 @@ async function submitModal(action, type, id){
       if(startDate>endDate){ toast('La fecha de inicio no puede ser posterior a la de fin','red'); return; }
       await apiFetch('PUT', '/api/rotations/'+id+'/schedule', { sectionId, teacherId, startDate, endDate, empresa, observaciones });
       await apiFetch('PUT', '/api/students/'+rot.studentId+'/group', { groupId });
-      await loadDB(); ui.modal=null; render(); toast('Cronograma actualizado');
+      await loadDB(['rotations','students','activityLog']); ui.modal=null; render(); toast('Cronograma actualizado');
     }
     else if(type==='cronograma-add-form'){
       const data = ui.modal.data;
@@ -3758,7 +3765,7 @@ async function submitModal(action, type, id){
       const empresa = val('f-cronadd-empresa'); const observaciones = val('f-cronadd-observaciones');
       if(startDate>endDate){ toast('La fecha de inicio no puede ser posterior a la de fin','red'); return; }
       await apiFetch('POST', '/api/rotations', { studentId:data.studentId, sectionId, teacherId, startDate, endDate, empresa, observaciones });
-      await loadDB(); ui.modal=null; render(); toast('Rotación creada');
+      await loadDB(['rotations','activityLog']); ui.modal=null; render(); toast('Rotación creada');
     }
     else if(type==='usuario-form'){
       const nombre = val('f-usu-nombre'); const username = val('f-usu-username'); const password = val('f-usu-password');
@@ -3785,7 +3792,7 @@ async function submitModal(action, type, id){
         semana: wk, texto, fecha: todayISO(), nota: notaVal===''?null:Number(notaVal), ausente,
         motivo: ausente? 'Ausente en la semana '+wk : undefined
       });
-      await loadDB(); ui.modal=null; render(); toast('Semana cargada');
+      await loadDB(['rotations','pendientes','activityLog']); ui.modal=null; render(); toast('Semana cargada');
     }
   }catch(e){
     toast(e.message || 'No se pudo guardar', 'red');
