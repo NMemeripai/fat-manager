@@ -1876,6 +1876,7 @@ function renderCronogramaActividades(){
       <span class="cell-strong" style="min-width:150px; text-align:center; text-transform:capitalize;">${actMesLabel(ui.actCalMes)}</span>
       <button class="btn btn-sm" data-action="act-cal-nav" data-dir="next">${icon('chevronRight','icon-sm')}</button>
       <button class="btn btn-sm" data-action="act-cal-hoy">Hoy</button>
+      ${isAdmin? `<button class="btn btn-sm btn-primary" data-action="generar-actividades-rotaciones">${icon('refresh','icon-sm')} Completar con datos de Rotaciones</button>`:''}
     </div>
   </div>
   <div style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:14px;">
@@ -3162,6 +3163,23 @@ function attachGlobalEvents(){
     }
     else if(action==='act-cal-nav'){ ui.actCalMes = actAddMonths(ui.actCalMes, t.getAttribute('data-dir')==='next'?1:-1); render(); }
     else if(action==='act-cal-hoy'){ ui.actCalMes = todayISO().slice(0,7); render(); }
+    else if(action==='generar-actividades-rotaciones'){
+      if(!DB.rotations.length){ toast('Todavía no hay rotaciones cargadas para generar actividades','amber'); return; }
+      const fechas = DB.rotations.flatMap(r=>[r.startDate,r.endDate]).sort();
+      const desde = fechas[0]; const hasta = fechas[fechas.length-1];
+      askConfirm({
+        title:'Completar Cronograma con datos de Rotaciones',
+        message:'Se va a generar una actividad por sección y por día para todo el período ya cargado en Rotaciones: desde el '+fmtDate(desde)+' hasta el '+fmtDate(hasta)+'. No duplica lo que ya exista en este calendario.',
+        confirmLabel:'Generar',
+        onConfirm: async ()=>{
+          try{
+            const r = await apiFetch('POST','/api/cronograma-actividades/generar', {desde, hasta});
+            await loadDB(); render();
+            toast(r.creadas? r.creadas+' actividad(es) generada(s) desde Rotaciones' : 'Ya estaba todo generado, no había nada nuevo');
+          }catch(e){ toast(e.message||'No se pudo generar','red'); }
+        }
+      });
+    }
     else if(action==='act-day-click'){
       const fecha = t.getAttribute('data-fecha');
       clearTimeout(window.__actClickTimer);
