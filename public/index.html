@@ -433,7 +433,7 @@ let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, m
   sort:{ students:{key:'legajo',dir:'asc'}, rotations:{key:'periodo',dir:'asc'}, documentosAlumno:{key:'fecha',dir:'desc'} },
   page:{ students:1, rotations:1, documentosAlumno:1 },
   sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
-  cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7) };
+  cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7), cronogramaTab:'semanal' };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -947,7 +947,6 @@ function renderShell(){
         ${navItem('reports','file','Informes', ['admin','coordinador','viewadmin'])}
         <div class="nav-section-label">Sistema</div>
         ${navItem('cronograma','calendar','Cronograma de Rotaciones', ['admin','coordinador','viewadmin'])}
-        ${navItem('cronograma-actividades','calendar','Cronograma de Actividades', ['admin','coordinador','viewadmin'])}
         ${navItem('planillas','file','Planillas Digitales FAT', ['admin','seccion','viewadmin'])}
         ${navItem('documentos','file','Centro de Documentos', ['admin','viewadmin'])}
         ${navItem('usuarios','users','Gestión de Usuarios', ['admin'])}
@@ -1019,7 +1018,6 @@ function renderView(){
     case 'guidelines': return renderGuidelines();
     case 'reports': return renderReports();
     case 'cronograma': return (session.role==='admin'||session.role==='coordinador'||session.role==='viewadmin') ? renderCronograma() : renderDashboard();
-    case 'cronograma-actividades': return (session.role==='admin'||session.role==='coordinador'||session.role==='viewadmin') ? renderCronogramaActividades() : renderDashboard();
     case 'planillas': return (session.role==='admin'||session.role==='seccion'||session.role==='viewadmin') ? renderPlanillas() : renderDashboard();
     case 'planilla-detalle': return renderPlanillaDetalle();
     case 'documentos': return (session.role==='admin'||session.role==='viewadmin') ? renderDocumentos() : renderDashboard();
@@ -1741,6 +1739,18 @@ function attendanceSummaryFor(studentId, weekStart, weekEnd){
 }
 
 function renderCronograma(){
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Cronograma de Rotaciones</h1><p class="page-sub">Seguimiento de las rotaciones de cada alumno, por semana o por actividad diaria</p></div>
+  </div>
+  <div class="tabs">
+    <div class="tab ${(ui.cronogramaTab||'semanal')==='semanal'?'active':''}" data-action="cronograma-tab" data-tab="semanal">${icon('users','icon-sm')} Por semana (alumnos)</div>
+    <div class="tab ${ui.cronogramaTab==='diario'?'active':''}" data-action="cronograma-tab" data-tab="diario">${icon('calendar','icon-sm')} Por día (actividades)</div>
+  </div>
+  ${ui.cronogramaTab==='diario' ? renderCronogramaActividadesBody() : renderCronogramaSemanalBody()}
+  `;
+}
+function renderCronogramaSemanalBody(){
   let students = DB.students.filter(s=>s.estado==='activo'||s.estado==='pausado');
   if(ui.cronFiltroGrupo) students = students.filter(s=>s.groupId===ui.cronFiltroGrupo);
   if(ui.cronFiltroCurso) students = students.filter(s=>s.curso===ui.cronFiltroCurso);
@@ -1750,10 +1760,7 @@ function renderCronograma(){
   if(!students.length){
     const cursosVacio = [...new Set(DB.students.map(s=>s.curso))];
     return `
-    <div class="page-head">
-      <div><h1 class="page-title">Cronograma de Rotaciones</h1></div>
-      ${hayFiltrosActivos? `<button class="btn btn-primary" data-action="cron-limpiar-filtros">${icon('x','icon-sm')} Limpiar filtros</button>`:''}
-    </div>
+    ${hayFiltrosActivos? `<div style="text-align:right; margin-bottom:10px;"><button class="btn btn-primary btn-sm" data-action="cron-limpiar-filtros">${icon('x','icon-sm')} Limpiar filtros</button></div>`:''}
     <div class="filters-row">
       <select class="select" data-action="cron-filtro-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${ui.cronFiltroGrupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
       <select class="select" data-action="cron-filtro-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${ui.cronFiltroSeccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
@@ -1782,9 +1789,7 @@ function renderCronograma(){
   const isAdmin = session.role==='admin';
 
   return `
-  <div class="page-head">
-    <div><h1 class="page-title">Cronograma de Rotaciones</h1><p class="page-sub">${students.length} alumno${students.length===1?'':'s'} · ${numWeeks} semanas${numWeeks>(DB.config.totalWeeks||20)? ' (se extendió más allá de las '+(DB.config.totalWeeks||20)+' por defecto para mostrar todas las rotaciones cargadas)' : ' de pasantía'}</p></div>
-  </div>
+  <p class="page-sub" style="margin:2px 0 14px;">${students.length} alumno${students.length===1?'':'s'} · ${numWeeks} semanas${numWeeks>(DB.config.totalWeeks||20)? ' (se extendió más allá de las '+(DB.config.totalWeeks||20)+' por defecto para mostrar todas las rotaciones cargadas)' : ' de pasantía'}</p>
   <div class="filters-row">
     <select class="select" data-action="cron-filtro-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${ui.cronFiltroGrupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
     <select class="select" data-action="cron-filtro-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${ui.cronFiltroSeccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
@@ -1852,7 +1857,7 @@ function actAddMonths(mes, n){
   const d = new Date(y, m-1+n, 1);
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
 }
-function renderCronogramaActividades(){
+function renderCronogramaActividadesBody(){
   const isAdmin = session.role==='admin' || session.role==='coordinador';
   const [y,m] = ui.actCalMes.split('-').map(Number);
   const firstOfMonth = ui.actCalMes+'-01';
@@ -1869,8 +1874,8 @@ function renderCronogramaActividades(){
   const dayNames = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
 
   return `
-  <div class="page-head">
-    <div><h1 class="page-title">Cronograma de Actividades</h1><p class="page-sub">Actividades por día, independiente de las rotaciones de los alumnos</p></div>
+  <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin:2px 0 14px;">
+    <p class="page-sub" style="margin:0;">Actividades por día, independiente de las rotaciones de los alumnos</p>
     <div style="display:flex; align-items:center; gap:8px;">
       <button class="btn btn-sm" data-action="act-cal-nav" data-dir="prev">${icon('chevronLeft','icon-sm')}</button>
       <span class="cell-strong" style="min-width:150px; text-align:center; text-transform:capitalize;">${actMesLabel(ui.actCalMes)}</span>
@@ -3161,6 +3166,7 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{ try{ await apiFetch('DELETE','/api/comunicados/'+id); await loadDB(); toast('Lineamiento eliminado'); }catch(e){ toast(e.message||'Error','red'); } }
       });
     }
+    else if(action==='cronograma-tab'){ ui.cronogramaTab = t.getAttribute('data-tab'); render(); }
     else if(action==='act-cal-nav'){ ui.actCalMes = actAddMonths(ui.actCalMes, t.getAttribute('data-dir')==='next'?1:-1); render(); }
     else if(action==='act-cal-hoy'){ ui.actCalMes = todayISO().slice(0,7); render(); }
     else if(action==='generar-actividades-rotaciones'){
