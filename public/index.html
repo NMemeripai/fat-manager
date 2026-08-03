@@ -1825,14 +1825,15 @@ function renderCronogramaSemanalBody(){
             const esHoy = isRotationCurrentByDate(rot) && weekStart<=todayISO() && todayISO()<=weekEnd;
             const color = sectionColor(rot.sectionId);
             const asis = attendanceSummaryFor(s.id, weekStart, weekEnd);
+            const excepcionesSemana = excepcionesEnRango(s.id, weekStart, weekEnd);
             let indicator = '';
             if(asis.total>0){
               if(asis.ausentes===0){ indicator = `<span class="cron-attend-dot cron-attend-ok" title="Asistió todos los días registrados esta semana">${icon('check','icon-sm')}</span>`; }
               else if(asis.presentes===0){ indicator = `<span class="cron-attend-dot cron-attend-bad" title="No asistió ningún día registrado esta semana">${icon('x','icon-sm')}</span>`; }
               else{ indicator = `<span class="cron-attend-dot cron-attend-warn" title="${asis.ausentes} inasistencia(s) esta semana"></span>`; }
             }
-            return `<td class="cron-cell${esHoy?' cron-cell-today':''}" style="background:${color}22;${esHoy?' box-shadow:inset 0 0 0 2px var(--accent);':''}" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" data-week-num="${n}" data-week-start="${weekStart}" data-week-end="${weekEnd}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)})${esHoy?' · En curso hoy':''} · ${esc(sectionName(rot.sectionId))}${rot.empresa?' · '+esc(rot.empresa):''} · ${esc(teacherName(rot.teacherId))}${asis.total?' · '+asis.presentes+' presente(s), '+asis.ausentes+' ausencia(s)':''}">
-              <div class="cron-cell-bar" style="background:${color};">${indicator}${esHoy?`<span class="badge badge-accent" style="position:absolute; top:2px; right:2px; font-size:9px; padding:1px 5px;">Hoy</span>`:''}</div>
+            return `<td class="cron-cell${esHoy?' cron-cell-today':''}" style="background:${color}22;${esHoy?' box-shadow:inset 0 0 0 2px var(--accent);':''}" ${isAdmin?`data-action="cron-edit" data-id="${rot.id}" data-week-num="${n}" data-week-start="${weekStart}" data-week-end="${weekEnd}" draggable="true" data-drag-rotation="${rot.id}"`:''} title="Semana ${n} (${fmtDate(weekStart)})${esHoy?' · En curso hoy':''} · ${esc(sectionName(rot.sectionId))}${rot.empresa?' · '+esc(rot.empresa):''} · ${esc(teacherName(rot.teacherId))}${asis.total?' · '+asis.presentes+' presente(s), '+asis.ausentes+' ausencia(s)':''}${excepcionesSemana.length?' · '+excepcionesSemana.length+' excepción(es) puntual(es) esta semana':''}">
+              <div class="cron-cell-bar" style="background:${color};">${indicator}${esHoy?`<span class="badge badge-accent" style="position:absolute; top:2px; right:2px; font-size:9px; padding:1px 5px;">Hoy</span>`:''}${excepcionesSemana.length?`<span style="position:absolute; bottom:2px; left:2px; width:8px; height:8px; border-radius:50%; background:#fff; border:2px solid var(--red);" title="${excepcionesSemana.length} excepción(es) esta semana"></span>`:''}</div>
             </td>`;
           }).join('')}
         </tr>`;
@@ -1847,6 +1848,13 @@ function renderCronogramaSemanalBody(){
 /* ---------------------------- CRONOGRAMA DE ACTIVIDADES (calendario mensual, módulo nuevo e independiente) ---------------------------- */
 function actividadesDelDia(fecha){
   return (DB.cronogramaActividades||[]).filter(a=>a.fecha===fecha).sort((a,b)=>(a.horaInicio||'99:99').localeCompare(b.horaInicio||'99:99'));
+}
+// Calculado 100% a partir de rotations (fechas de inicio/fin) — no se guarda nada nuevo,
+// así que nunca puede quedar desactualizado ni duplicar información. Excluye a los alumnos
+// que tengan una EXCEPCIÓN puntual cargada ese día (para que no figuren en dos lados a la vez).
+function alumnosEnSeccionEseDia(sectionId, fecha){
+  const conExcepcion = new Set((DB.cronogramaActividades||[]).filter(a=>a.fecha===fecha && a.studentId).map(a=>a.studentId));
+  return DB.students.filter(s=> !conExcepcion.has(s.id) && rotationsOf(s.id).some(r=> r.sectionId===sectionId && fecha>=r.startDate && fecha<=r.endDate));
 }
 function actMesLabel(mes){
   const [y,m] = mes.split('-').map(Number);
@@ -1900,11 +1908,14 @@ function renderCronogramaActividadesBody(){
       const extra = acts.length-shown.length;
       const dayNum = Number(fecha.slice(8,10));
       const tooltip = acts.length
-        ? 'Actividades del '+fmtDate(fecha)+':\n'+acts.map(a=>'• '+sectionName(a.sectionId)+(a.horaInicio||a.horaFin? ' ('+(a.horaInicio||'—')+' a '+(a.horaFin||'—')+')':'')+(a.observaciones? ' — '+a.observaciones:'')).join('\n')
+        ? 'Actividades del '+fmtDate(fecha)+':\n'+acts.map(a=>{
+            const alumno = a.studentId? DB.students.find(s=>s.id===a.studentId) : null;
+            return '• '+(alumno? (alumno.nombre+' '+alumno.apellido)+' → ' : '')+sectionName(a.sectionId)+(alumno?' (excepción)':'')+(a.horaInicio||a.horaFin? ' ('+(a.horaInicio||'—')+' a '+(a.horaFin||'—')+')':'')+(a.observaciones? ' — '+a.observaciones:'');
+          }).join('\n')
         : 'Sin actividades el '+fmtDate(fecha);
       return `<div class="act-cal-day ${isOutside?'act-cal-outside':''} ${isToday?'act-cal-today':''}" data-action="act-day-click" data-fecha="${fecha}" title="${esc(tooltip)}">
         <div class="act-cal-daynum">${dayNum}</div>
-        ${shown.map(a=>`<div class="act-cal-bar" style="background:${sectionColor(a.sectionId)};">${esc(sectionName(a.sectionId))}</div>`).join('')}
+        ${shown.map(a=>`<div class="act-cal-bar" style="background:${sectionColor(a.sectionId)}; ${a.studentId?'border:1.5px dashed #fff;':''}">${a.studentId?icon('user','icon-sm')+' ':''}${esc(sectionName(a.sectionId))}</div>`).join('')}
         ${extra>0? `<div class="act-cal-more">+${extra}</div>` : ''}
       </div>`;
     }).join('')}
@@ -1914,20 +1925,35 @@ function renderCronogramaActividadesBody(){
 }
 function actividadDiaListHtml(fecha, editable){
   const acts = actividadesDelDia(fecha);
-  return `
-  <p class="cell-muted" style="font-size:12.5px; margin-bottom:10px;">${fmtDate(fecha)}</p>
-  ${acts.length? acts.map(a=>`
-    <div style="border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-      <div>
-        <div style="font-weight:650; font-size:13px; display:flex; align-items:center; gap:7px;">${sectionDot(a.sectionId)} ${esc(sectionName(a.sectionId))}</div>
+  const generales = acts.filter(a=>!a.studentId);
+  const excepciones = acts.filter(a=>a.studentId);
+  const renderCard = (a)=>{
+    const alumnos = a.studentId? [] : alumnosEnSeccionEseDia(a.sectionId, fecha);
+    const alumnoExcepcion = a.studentId? DB.students.find(s=>s.id===a.studentId) : null;
+    return `
+    <div style="border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:flex-start; gap:10px; ${a.studentId?'background:var(--accent-softer);':''}">
+      <div style="flex:1;">
+        ${a.studentId? `<div style="font-weight:650; font-size:13px; margin-bottom:3px;">${alumnoExcepcion? esc(alumnoExcepcion.nombre+' '+alumnoExcepcion.apellido) : 'Alumno no encontrado'}</div>`:''}
+        <div style="font-weight:${a.studentId?600:650}; font-size:${a.studentId?12.5:13}px; display:flex; align-items:center; gap:7px;">${sectionDot(a.sectionId)} ${esc(sectionName(a.sectionId))}${a.studentId?' <span class="cell-muted" style="font-weight:500;">(excepción puntual)</span>':''}</div>
         ${(a.horaInicio||a.horaFin)? `<div class="cell-muted" style="font-size:12px; margin-top:2px;">${icon('clock','icon-sm')} ${a.horaInicio||'—'} a ${a.horaFin||'—'}</div>`:''}
         ${a.observaciones? `<div style="font-size:12.5px; margin-top:4px;">${esc(a.observaciones)}</div>`:''}
+        ${!a.studentId? `<div style="margin-top:8px;">
+          <div class="cell-muted" style="font-size:11.5px; font-weight:650; margin-bottom:4px;">${icon('users','icon-sm')} Alumnos en su rotación asignada (${alumnos.length})</div>
+          ${alumnos.length? `<div style="display:flex; flex-wrap:wrap; gap:6px;">${alumnos.map(s=>`<span class="badge badge-neutral" style="cursor:pointer;" data-action="open-student" data-id="${s.id}">${esc(s.nombre)} ${esc(s.apellido)}</span>`).join('')}</div>` : `<span class="cell-muted" style="font-size:12px;">Ningún alumno tiene una rotación en esta sección ese día.</span>`}
+        </div>` : ''}
       </div>
       ${editable? `<div style="display:flex; gap:4px; flex-shrink:0;">
         <button class="btn btn-ghost btn-sm" data-action="edit-actividad" data-id="${a.id}">${icon('edit','icon-sm')}</button>
         <button class="btn btn-ghost btn-sm" data-action="delete-actividad" data-id="${a.id}">${icon('trash','icon-sm')}</button>
       </div>`:''}
-    </div>`).join('') : `<div class="empty-state" style="padding:20px;"><div class="em-icon">${icon('calendar')}</div><div class="em-title">Sin actividades este día</div></div>`}
+    </div>`;
+  };
+  return `
+  <p class="cell-muted" style="font-size:12.5px; margin-bottom:10px;">${fmtDate(fecha)}</p>
+  <div class="cell-muted" style="font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">Actividades generales</div>
+  ${generales.length? generales.map(renderCard).join('') : `<div class="empty-state" style="padding:16px;">Sin actividades generales cargadas este día.</div>`}
+  <div class="cell-muted" style="font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; margin:14px 0 6px;">Excepciones puntuales por alumno</div>
+  ${excepciones.length? excepciones.map(renderCard).join('') : `<div class="empty-state" style="padding:16px;">Sin excepciones cargadas este día.</div>`}
   `;
 }
 function actividadDiaDetalleHtml(data){
@@ -1938,13 +1964,26 @@ function actividadDiaDetalleHtml(data){
 }
 function actividadDiaEditorHtml(data){
   const editing = data.editingId? (DB.cronogramaActividades||[]).find(a=>a.id===data.editingId) : null;
+  const esExcepcion = editing? !!editing.studentId : false;
   return `
   ${actividadDiaListHtml(data.fecha, true)}
   <div class="section-card" style="background:var(--surface-2); margin-top:14px;">
     <h3 style="font-size:13px;">${editing? 'Editar actividad':'Agregar actividad'}</h3>
     <input type="hidden" id="f-act-fecha" value="${data.fecha}">
     <input type="hidden" id="f-act-editing-id" value="${editing? editing.id:''}">
-    <div class="field"><label>Sección</label>
+    <div class="field"><label>Aplica a</label>
+      <select class="select" id="f-act-aplica" style="width:100%;" data-action="act-aplica-toggle">
+        <option value="seccion" ${!esExcepcion?'selected':''}>Toda la sección (todos los que tengan rotación ahí)</option>
+        <option value="alumno" ${esExcepcion?'selected':''}>Un alumno en particular (excepción puntual)</option>
+      </select>
+    </div>
+    <div class="field" id="f-act-alumno-wrap" style="${esExcepcion?'':'display:none;'}">
+      <label>Alumno</label>
+      <select class="select" id="f-act-alumno" style="width:100%;">
+        ${DB.students.slice().sort((a,b)=>(a.apellido+a.nombre).localeCompare(b.apellido+b.nombre)).map(s=>`<option value="${s.id}" ${editing&&editing.studentId===s.id?'selected':''}>${esc(s.apellido)}, ${esc(s.nombre)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Sección${esExcepcion?' a la que fue esta vez':''}</label>
       <select class="select" id="f-act-seccion" style="width:100%;">
         ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`<option value="${s.id}" ${editing&&editing.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
       </select>
@@ -1962,6 +2001,9 @@ function actividadDiaEditorHtml(data){
   `;
 }
 
+function excepcionesEnRango(studentId, desde, hasta){
+  return (DB.cronogramaActividades||[]).filter(a=>a.studentId===studentId && a.fecha>=desde && a.fecha<=hasta).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+}
 function cronogramaEditFormHtml(rot){
   const student = DB.students.find(s=>s.id===rot.studentId);
   let asistenciaPanel = '';
@@ -1979,8 +2021,50 @@ function cronogramaEditFormHtml(rot){
       ${asis.dias.length? `<ul class="mono-list">${asis.dias.map(d=>`<li><span>${fmtDate(d.fecha)}</span>${asistenciaBadge(d.estado)}</li>`).join('')}</ul>` : `<p class="cell-muted" style="font-size:12px;">Todavía no se cargó asistencia para esta semana en ninguna Planilla Digital FAT de este alumno.</p>`}
     </div>`;
   }
+  let excepcionesPanel = '';
+  if(rot._weekStart && rot._weekEnd){
+    const excepciones = excepcionesEnRango(rot.studentId, rot._weekStart, rot._weekEnd);
+    const editingExc = rot._editingExcepcionId? excepciones.find(e=>e.id===rot._editingExcepcionId) : null;
+    excepcionesPanel = `
+    <div class="section-card" style="background:var(--accent-softer); margin-bottom:16px;">
+      <h3 style="font-size:13px;">${icon('alertTriangle','icon-sm')} Excepciones puntuales esta semana</h3>
+      ${excepciones.length? excepciones.map(e=>`
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border);">
+          <div style="font-size:12.5px;">
+            <strong>${fmtDate(e.fecha)}</strong> → ${sectionDot(e.sectionId)} ${esc(sectionName(e.sectionId))}
+            ${(e.horaInicio||e.horaFin)? ` · ${e.horaInicio||'—'} a ${e.horaFin||'—'}`:''}
+            ${e.observaciones? `<div class="cell-muted">${esc(e.observaciones)}</div>`:''}
+          </div>
+          <div style="display:flex; gap:4px; flex-shrink:0;">
+            <button class="btn btn-ghost btn-sm" type="button" data-action="edit-excepcion-semana" data-id="${e.id}">${icon('edit','icon-sm')}</button>
+            <button class="btn btn-ghost btn-sm" type="button" data-action="delete-excepcion-semana" data-id="${e.id}">${icon('trash','icon-sm')}</button>
+          </div>
+        </div>`).join('') : `<p class="cell-muted" style="font-size:12px; margin-bottom:8px;">Sin excepciones cargadas esta semana para ${esc(student?student.nombre:'este alumno')}.</p>`}
+      <div style="margin-top:10px;">
+        <input type="hidden" id="f-exc-editing-id" value="${editingExc?editingExc.id:''}">
+        <div class="field-row">
+          <div class="field"><label>Día de la excepción</label><input class="input" type="date" id="f-exc-fecha" min="${rot._weekStart}" max="${rot._weekEnd}" value="${editingExc?editingExc.fecha:rot._weekStart}"></div>
+          <div class="field"><label>Sección a la que fue</label>
+            <select class="select" id="f-exc-seccion" style="width:100%;">
+              ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`<option value="${s.id}" ${editingExc&&editingExc.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Hora inicio (opcional)</label><input class="input" type="time" id="f-exc-hora-inicio" value="${editingExc&&editingExc.horaInicio?editingExc.horaInicio:''}"></div>
+          <div class="field"><label>Hora fin (opcional)</label><input class="input" type="time" id="f-exc-hora-fin" value="${editingExc&&editingExc.horaFin?editingExc.horaFin:''}"></div>
+        </div>
+        <div class="field"><label>Observaciones (opcional)</label><textarea class="input" id="f-exc-observaciones" style="min-height:60px;">${editingExc?esc(editingExc.observaciones||''):''}</textarea></div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary btn-sm" type="button" data-action="save-excepcion-semana" data-rotation-id="${rot.id}">${editingExc? icon('check','icon-sm')+' Guardar cambios' : icon('plus','icon-sm')+' Agregar excepción'}</button>
+          ${editingExc? `<button class="btn btn-sm" type="button" data-action="cancel-edit-excepcion-semana" data-rotation-id="${rot.id}">Cancelar</button>`:''}
+        </div>
+      </div>
+    </div>`;
+  }
   return `
   ${asistenciaPanel}
+  ${excepcionesPanel}
   <div class="kv" style="margin-bottom:14px;"><dt>Alumno</dt><dd>${esc(student?student.nombre+' '+student.apellido:'—')}</dd></div>
   <div class="field-row">
     <div class="field"><label>Sección</label>
@@ -2932,7 +3016,7 @@ function attachGlobalEvents(){
     }
     else if(action==='confirm-yes'){ const cb = ui.confirm && ui.confirm.onConfirm; ui.confirm=null; if(cb) await cb(); render(); }
     else if(action==='confirm-no'){ if(e.target===t){ ui.confirm=null; render(); } }
-    else if(action==='open-student'){ ui.selectedStudentId=id; ui.view='student-detail'; render(); }
+    else if(action==='open-student'){ ui.selectedStudentId=id; ui.view='student-detail'; ui.modal=null; render(); }
     else if(action==='back-students'){ ui.view='students'; render(); }
     else if(action==='new-student'){ ui.modal={type:'student-form', data:null}; render(); }
     else if(action==='edit-student'){ ui.modal={type:'student-form', data:DB.students.find(s=>s.id===id)}; render(); }
@@ -3005,6 +3089,40 @@ function attachGlobalEvents(){
     else if(action==='cron-add'){
       ui.modal={type:'cronograma-add-form', data:{ studentId:t.getAttribute('data-student-id'), weekStart:t.getAttribute('data-week-start'), weekEnd:t.getAttribute('data-week-end') }};
       render();
+    }
+    else if(action==='edit-excepcion-semana'){ ui.modal.data._editingExcepcionId = id; render(); }
+    else if(action==='cancel-edit-excepcion-semana'){ ui.modal.data._editingExcepcionId = null; render(); }
+    else if(action==='delete-excepcion-semana'){
+      askConfirm({
+        title:'Eliminar excepción', message:'¿Eliminar esta excepción puntual?', confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{
+            await apiFetch('DELETE','/api/cronograma-actividades/'+id);
+            await loadDB();
+            const fresh = DB.rotations.find(r=>r.id===ui.modal.data.id);
+            if(fresh) ui.modal.data = { ...fresh, _weekStart:ui.modal.data._weekStart, _weekEnd:ui.modal.data._weekEnd, _weekNum:ui.modal.data._weekNum };
+            render();
+            toast('Excepción eliminada');
+          }catch(e){ toast(e.message||'Error','red'); }
+        }
+      });
+    }
+    else if(action==='save-excepcion-semana'){
+      const rotId = t.getAttribute('data-rotation-id');
+      const editingId = val('f-exc-editing-id');
+      const fecha = val('f-exc-fecha'); const sectionId = val('f-exc-seccion');
+      const horaInicio = val('f-exc-hora-inicio'); const horaFin = val('f-exc-hora-fin'); const observaciones = val('f-exc-observaciones');
+      if(!fecha || !sectionId){ toast('Elegí el día y la sección','red'); return; }
+      const studentId = ui.modal.data.studentId;
+      try{
+        if(editingId) await apiFetch('PUT','/api/cronograma-actividades/'+editingId, {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
+        else await apiFetch('POST','/api/cronograma-actividades', {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
+        await loadDB();
+        const fresh = DB.rotations.find(r=>r.id===rotId);
+        if(fresh) ui.modal.data = { ...fresh, _weekStart:ui.modal.data._weekStart, _weekEnd:ui.modal.data._weekEnd, _weekNum:ui.modal.data._weekNum, _editingExcepcionId:null };
+        render();
+        toast(editingId? 'Excepción actualizada':'Excepción agregada');
+      }catch(e){ toast(e.message||'No se pudo guardar la excepción','red'); }
     }
     else if(action==='delete-cron-rotation'){
       askConfirm({
@@ -3207,10 +3325,13 @@ function attachGlobalEvents(){
       const fecha = val('f-act-fecha'); const editingId = val('f-act-editing-id');
       const sectionId = val('f-act-seccion'); const horaInicio = val('f-act-hora-inicio'); const horaFin = val('f-act-hora-fin');
       const observaciones = val('f-act-observaciones');
+      const aplicaA = val('f-act-aplica');
+      const studentId = aplicaA==='alumno' ? val('f-act-alumno') : '';
       if(!sectionId){ toast('Elegí una sección','red'); return; }
+      if(aplicaA==='alumno' && !studentId){ toast('Elegí el alumno de la excepción','red'); return; }
       try{
-        if(editingId) await apiFetch('PUT','/api/cronograma-actividades/'+editingId, {fecha, sectionId, horaInicio, horaFin, observaciones});
-        else await apiFetch('POST','/api/cronograma-actividades', {fecha, sectionId, horaInicio, horaFin, observaciones});
+        if(editingId) await apiFetch('PUT','/api/cronograma-actividades/'+editingId, {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
+        else await apiFetch('POST','/api/cronograma-actividades', {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
         await loadDB();
         ui.modal={type:'actividad-dia-editor', data:{fecha}};
         render();
@@ -3298,6 +3419,10 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="com-destino-tipo"]')){
       const wrap = document.getElementById('f-com-profesores-wrap');
       if(wrap) wrap.style.display = t.value==='elegir' ? 'block' : 'none';
+    }
+    else if(t.matches('[data-action="act-aplica-toggle"]')){
+      const wrap = document.getElementById('f-act-alumno-wrap');
+      if(wrap) wrap.style.display = t.value==='alumno' ? 'block' : 'none';
     }
     else if(t.id==='f-com-files'){
       const files = t.files;
