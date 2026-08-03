@@ -216,7 +216,12 @@ app.get('/api/state', auth, h(async (req, res) => {
   const pendientes = await allDocs('pendientes');
   const activityLog = await getActivityLog(40);
   const users = (await allDocs('users')).map(u => ({ id: u.id, username: u.username, role: u.role, nombre: u.nombre, teacherId: u.teacherId, sectionId: u.sectionId, studentId: u.studentId || null }));
-  res.json({ config, teachers, sections, students, rotations, consignas, objetivos, groups, pendientes, activityLog, users });
+  let comunicados = await allDocs('comunicados');
+  comunicados.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  if (req.user.role === 'seccion') {
+    comunicados = comunicados.filter(c => comunicadoVisibleParaProfesor(c, req.user.teacherId)).map(c => comunicadoParaProfesor(c, req.user.teacherId));
+  }
+  res.json({ config, teachers, sections, students, rotations, consignas, objetivos, groups, pendientes, activityLog, users, comunicados });
 }));
 
 /* ---------------------------- students ---------------------------- */
@@ -657,6 +662,68 @@ app.post('/api/objetivos', auth, requireRole('admin', 'coordinador'), h(async (r
 }));
 app.delete('/api/objetivos/:id', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
   await db.collection('objetivos').doc(req.params.id).delete();
+  res.json({ ok: true });
+}));
+
+/* ---------------------------- Comunicados (lineamientos individuales con destinatarios) ---------------------------- */
+function comunicadoVisibleParaProfesor(c, teacherId) {
+  return c.destinatarioTipo === 'todos' || (c.destinatarios || []).includes(teacherId);
+}
+// Recorta el registro para un profesor: solo su propia lectura, nunca la de otros colegas.
+function comunicadoParaProfesor(c, teacherId) {
+  const { lecturas, ...rest } = c;
+  return { ...rest, miLectura: (lecturas || {})[teacherId] || null };
+}
+
+app.post('/api/comunicados', auth, requireRole('admin'), upload.array('adjuntos', 5), h(async (req, res) => {
+  const { titulo, descripcion, prioridad, destinatarioTipo, vencimiento } = req.body || {};
+  if (!titulo) return res.status(400).json({ error: 'El título es obligatorio' });
+  if (!['urgente', 'importante', 'informativo'].includes(prioridad)) return res.status(400).json({ error: 'Prioridad inválida' });
+  if (!['todos', 'especifico', 'varios'].includes(destinatarioTipo)) return res.status(400).json({ error: 'Destinatario inválido' });
+  let destinatarios = [];
+  try { destinatarios = req.body.destinatarios ? JSON.parse(req.body.destinatarios) : []; } catch (e) { destinatarios = []; }
+  if (destinatarioTipo !== 'todos' && !destinatarios.length) return res.status(400).json({ error: 'Elegí al menos un destinatario' });
+
+  let adjuntos = [];
+  if (req.files && req.files.length) {
+    if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
+    adjuntos = await Promise.all(req.files.map(f => new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'fat-manager/comunicados', resource_type: 'raw', public_id: uid('adj') + extOf(f.originalname) },
+        (err, r) => err ? reject(err) : resolve({ nombre: f.originalname, url: r.secure_url })
+      );
+      stream.end(f.buffer);
+    })));
+  }
+
+  const id = uid('com');
+  const now = new Date();
+  const record = {
+    titulo, descripcion: descripcion || '', prioridad, destinatarioTipo,
+    destinatarios: destinatarioTipo === 'todos' ? [] : destinatarios,
+    vencimiento: vencimiento || null, adjuntos, lecturas: {},
+    createdBy: req.user.sub, createdByNombre: req.user.nombre, createdAt: now.toISOString()
+  };
+  await db.collection('comunicados').doc(id).set(record);
+  await logActivity(`${req.user.nombre} envió el lineamiento "${titulo}".`);
+  res.status(201).json({ id, ...record });
+}));
+
+app.post('/api/comunicados/:id/leido', auth, requireRole('seccion'), h(async (req, res) => {
+  const c = await docData('comunicados', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Lineamiento no encontrado' });
+  if (!comunicadoVisibleParaProfesor(c, req.user.teacherId)) return res.status(403).json({ error: 'Este lineamiento no es para vos' });
+  if (!(c.lecturas || {})[req.user.teacherId]) {
+    const now = new Date();
+    await db.collection('comunicados').doc(req.params.id).update({
+      [`lecturas.${req.user.teacherId}`]: { fecha: now.toISOString().slice(0, 10), hora: now.toTimeString().slice(0, 5) }
+    });
+  }
+  res.json({ ok: true });
+}));
+
+app.delete('/api/comunicados/:id', auth, requireRole('admin'), h(async (req, res) => {
+  await db.collection('comunicados').doc(req.params.id).delete();
   res.json({ ok: true });
 }));
 
