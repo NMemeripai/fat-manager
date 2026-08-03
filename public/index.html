@@ -860,7 +860,7 @@ function renderStudentPortalPage(){
           ${SP.rotaciones.slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||'')).map((r,i)=>{
             const cls = r.status==='finalizada'?'done':(isRotationCurrentByDate(r)?'current':'');
             const dot = r.status==='finalizada'? icon('check','icon-sm') : (i+1);
-            return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${esc(r.sectionNombre)}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
+            return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${r.sectionColor?`<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${r.sectionColor}; flex-shrink:0;"></span> `:''}${esc(r.sectionNombre)}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
           }).join('')}
         </div>
       </div>
@@ -1121,7 +1121,7 @@ function renderDashboard(){
 
   const bySection = DB.sections.map(sec=>{
     const count = studentsCurrentlyInSection(sec.id).length;
-    return {name:sec.nombre, count};
+    return {id:sec.id, name:sec.nombre, count};
   });
   const maxCount = Math.max(1, ...bySection.map(b=>b.count));
 
@@ -1142,8 +1142,8 @@ function renderDashboard(){
       <h3>Alumnos en curso por sección</h3>
       ${bySection.map(b=>`
         <div class="bar-row">
-          <div class="bar-label">${esc(b.name)}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${(b.count/maxCount*100)||0}%"></div></div>
+          <div class="bar-label">${sectionDot(b.id)} ${esc(b.name)}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${(b.count/maxCount*100)||0}%; background:${sectionColor(b.id)};"></div></div>
           <div class="bar-val">${b.count}</div>
         </div>`).join('')}
     </div>
@@ -1273,7 +1273,7 @@ function renderStudents(){
         <td class="cell-muted">${esc(s.legajo)}</td>
         <td>${grupo? `<span class="badge badge-neutral">${esc(grupo.nombre)}</span>` : '<span class="cell-muted">—</span>'}</td>
         <td>${s.estado==='activo'? currentWeekOf(s)+' / '+DB.config.totalWeeks : '—'}</td>
-        <td>${cur? esc(sectionName(cur.sectionId)) : '—'}</td>
+        <td>${cur? sectionDot(cur.sectionId)+' '+esc(sectionName(cur.sectionId)) : '—'}</td>
         <td>${avg? `<span class="badge badge-accent">${avg}</span>` : '<span class="cell-muted">—</span>'}</td>
         <td>${estadoBadge(s.estado)}</td>
       </tr>`;
@@ -1346,7 +1346,7 @@ function renderStudentDetail(){
       ${rots.map((r,i)=>{
         const cls = r.status==='finalizada'?'done':(isRotationCurrentByDate(r)?'current':'');
         const dot = r.status==='finalizada'? icon('check','icon-sm') : (i+1);
-        return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${esc(sectionName(r.sectionId))}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
+        return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${sectionDot(r.sectionId)} ${esc(sectionName(r.sectionId))}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
       }).join('')}
     </div>
   </div>
@@ -1363,7 +1363,7 @@ function renderRotationBlock(r, displayNum){
   return `
   <div style="border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:12px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
-      <div style="font-weight:700; font-size:13.5px;">${displayNum}. ${esc(sectionName(r.sectionId))} <span class="cell-muted" style="font-weight:500;">· ${esc(teacherName(r.teacherId))}</span></div>
+      <div style="font-weight:700; font-size:13.5px;">${displayNum}. ${sectionDot(r.sectionId)} ${esc(sectionName(r.sectionId))} <span class="cell-muted" style="font-weight:500;">· ${esc(teacherName(r.teacherId))}</span></div>
       <div style="display:flex; gap:8px; align-items:center;">
         ${statusBadge(r.status)}
         ${rotationAvg(r)!=null? `<span class="badge badge-accent">Promedio: ${rotationAvg(r).toFixed(1)}</span>`:''}
@@ -1395,7 +1395,7 @@ function renderSections(){
   <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));">
     ${sorted.map((sec,idx)=>{
       const enCurso = studentsCurrentlyInSection(sec.id);
-      return `<div class="card">
+      return `<div class="card" style="border-top:3px solid ${sectionColor(sec.id)};">
         <div style="display:flex; justify-content:space-between; align-items:flex-start;">
           <div>
             <div style="font-weight:700; font-size:14.5px;">${sec.orden}. ${esc(sec.nombre)}</div>
@@ -1465,7 +1465,7 @@ function renderRotations(){
     ${pageItems.length? pageItems.map(r=>`
       <tr>
         <td class="cell-strong" style="cursor:pointer;" data-action="open-student" data-id="${r.studentId}">${esc(studentName(r.studentId))}</td>
-        <td>${esc(sectionName(r.sectionId))}</td>
+        <td>${sectionDot(r.sectionId)} ${esc(sectionName(r.sectionId))}</td>
         <td class="cell-muted">${esc(teacherName(r.teacherId))}</td>
         <td class="cell-muted">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</td>
         <td>${statusBadge(r.status)}</td>
@@ -1499,7 +1499,7 @@ function renderGrades(){
     ${rots.length? rots.map(r=>`
       <tr>
         <td class="cell-strong">${esc(studentName(r.studentId))}</td>
-        <td>${esc(sectionName(r.sectionId))}</td>
+        <td>${sectionDot(r.sectionId)} ${esc(sectionName(r.sectionId))}</td>
         <td class="cell-muted">${esc(teacherName(r.teacherId))}</td>
         <td>${statusBadge(r.status)}</td>
         <td>${rotationAvg(r)!=null? `<span class="badge badge-accent">${rotationAvg(r).toFixed(1)}</span>` : `<span class="badge badge-red">Sin cargar</span>`}</td>
@@ -1542,7 +1542,7 @@ function renderPendientes(){
       const editable = session.role==='admin' || (session.role==='seccion' && p.teacherId===session.teacherId);
       return `<tr>
         <td class="cell-strong" style="cursor:pointer;" data-action="open-student" data-id="${p.studentId}">${esc(studentName(p.studentId))}</td>
-        <td>${esc(sectionName(p.sectionId))}</td>
+        <td>${sectionDot(p.sectionId)} ${esc(sectionName(p.sectionId))}</td>
         <td class="cell-muted">${esc(teacherName(p.teacherId))}</td>
         <td>${p.semana||'—'}</td>
         <td class="cell-muted">${p.fecha? fmtDate(p.fecha) : '—'}</td>
@@ -1639,10 +1639,13 @@ function asistenciaBadge(estado){
 /* ---------------------------- CRONOGRAMA DE ROTACIONES (grilla interactiva tipo Excel) ---------------------------- */
 const SECTION_PALETTE = ['#2563EB','#16A34A','#D97706','#DB2777','#7C3AED','#0891B2','#DC2626','#4D7C0F','#0D9488','#9333EA'];
 function sectionColor(sectionId){
+  const sec = DB.sections.find(s=>s.id===sectionId);
+  if(sec && sec.color) return sec.color;
   const sorted = DB.sections.slice().sort((a,b)=>a.orden-b.orden);
   const idx = sorted.findIndex(s=>s.id===sectionId);
   return SECTION_PALETTE[idx>=0? idx % SECTION_PALETTE.length : 0];
 }
+function sectionDot(sectionId){ return `<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${sectionColor(sectionId)}; flex-shrink:0;"></span>`; }
 function mondayOf(iso){ const d=new Date(iso+'T00:00:00'); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day); return d.toISOString().slice(0,10); }
 
 // Junta TODOS los registros de asistencia cargados en Planillas Digitales FAT para un alumno
@@ -1862,7 +1865,7 @@ function renderPlanillas(){
     ${PLANILLAS.length? PLANILLAS.map(p=>`
       <tr class="clickable" data-action="open-planilla" data-id="${p.id}">
         <td class="cell-strong">${esc(studentName(p.studentId))}</td>
-        <td>${esc(sectionName(p.sectionId))}</td>
+        <td>${sectionDot(p.sectionId)} ${esc(sectionName(p.sectionId))}</td>
         <td class="cell-muted">${esc(teacherName(p.teacherId))}</td>
         <td>${esc(p.grupo||'—')}</td>
         <td>${fmtDate(p.fecha)}</td>
@@ -1928,7 +1931,7 @@ function renderPlanillaDocumento(p){
     <table class="planilla-doc-table">
       <tr><th>Grupo</th><td>${esc(p.grupo||'—')}</td><th>Año</th><td>${esc(String(p.anio||'—'))}</td></tr>
       <tr><th>Estudiante</th><td>${esc(student? student.nombre+' '+student.apellido : '—')}</td><th>Fecha</th><td>${fmtDate(p.fecha)}</td></tr>
-      <tr><th>Docente</th><td>${esc(teacherName(p.teacherId))}</td><th>Sección</th><td>${esc(sectionName(p.sectionId))}</td></tr>
+      <tr><th>Docente</th><td>${esc(teacherName(p.teacherId))}</td><th>Sección</th><td>${sectionDot(p.sectionId)} ${esc(sectionName(p.sectionId))}</td></tr>
     </table>
 
     <h3 class="planilla-doc-section-title">Asistencia</h3>
@@ -1965,7 +1968,7 @@ function renderPlanillaForm(p){
     <h3>Datos generales</h3>
     <div class="kv" style="margin-bottom:10px;">
       <dt>Alumno</dt><dd>${esc(student? student.nombre+' '+student.apellido:'—')}</dd>
-      <dt>Sección</dt><dd>${esc(sectionName(p.sectionId))}</dd>
+      <dt>Sección</dt><dd>${sectionDot(p.sectionId)} ${esc(sectionName(p.sectionId))}</dd>
       <dt>Docente</dt><dd>${esc(teacherName(p.teacherId))}</dd>
     </div>
     <div class="field-row">
@@ -2141,7 +2144,7 @@ function renderDocumentos(){
           <td class="cell-strong">${d.studentId? esc(studentName(d.studentId)) : '—'}</td>
           <td class="cell-muted">${esc(d.curso||'—')}</td>
           <td class="cell-muted">${d.groupId? esc(groupName(d.groupId)) : '—'}</td>
-          <td class="cell-muted">${d.sectionId? esc(sectionName(d.sectionId)) : '—'}</td>
+          <td class="cell-muted">${d.sectionId? sectionDot(d.sectionId)+' '+esc(sectionName(d.sectionId)) : '—'}</td>
           <td>${d.semana!=null? d.semana : '—'}</td>
           <td>${icon(docIcon(d.nombre),'icon-sm')} ${esc(d.nombre)}</td>
           <td><span class="badge badge-neutral">${formatoLabel(d.formato)}</span></td>
@@ -2388,6 +2391,13 @@ function sectionFormHtml(sec){
     </div>
     <div class="field"><label>Duración (semanas)</label><input class="input" type="number" min="1" id="f-sec-weeks" value="${sec.weeks||5}"></div>
   </div>
+  <div class="field">
+    <label>Color de la sección</label>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <input type="color" id="f-sec-color" value="${esc(sec.color||sectionColor(sec.id||''))}" style="width:44px; height:36px; padding:2px; border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; background:var(--surface);">
+      <span class="cell-muted" style="font-size:12.5px;">Se refleja automáticamente en Cronograma, Rotaciones, Dashboard, Planillas e Informes.</span>
+    </div>
+  </div>
   ${!sec.id? `<p class="help-text">Se agrega al final del orden de rotación. Después la podés reordenar con las flechas ↑ ↓.</p>`:`<p class="help-text">Si cambiás la duración, el total de semanas del programa se recalcula solo.</p>`}
   `;
 }
@@ -2420,7 +2430,7 @@ function rotationFormHtml(r){
   return `
   <div class="kv" style="margin-bottom:12px;">
     <dt>Alumno</dt><dd>${esc(studentName(r.studentId))}</dd>
-    <dt>Sección</dt><dd>${esc(sectionName(r.sectionId))}</dd>
+    <dt>Sección</dt><dd>${sectionDot(r.sectionId)} ${esc(sectionName(r.sectionId))}</dd>
     <dt>Período</dt><dd>${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</dd>
   </div>
   <div class="tabs" id="rot-tabs">
@@ -3090,9 +3100,10 @@ async function submitModal(action, type, id){
     }
     else if(type==='section-form'){
       const nombre = val('f-sec-nombre'); const teacherId = val('f-sec-teacher')||null; const weeks = Number(val('f-sec-weeks'))||5;
+      const color = val('f-sec-color')||null;
       if(!nombre){ toast('Ponele un nombre a la sección','red'); return; }
-      if(id) await apiFetch('PUT', '/api/sections/'+id, { nombre, teacherId, weeks });
-      else await apiFetch('POST', '/api/sections', { nombre, teacherId, weeks });
+      if(id) await apiFetch('PUT', '/api/sections/'+id, { nombre, teacherId, weeks, color });
+      else await apiFetch('POST', '/api/sections', { nombre, teacherId, weeks, color });
       await loadDB(); ui.modal=null; render(); toast(id? 'Sección actualizada':'Sección creada');
     }
     else if(type==='group-form'){
