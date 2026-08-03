@@ -762,6 +762,47 @@ app.delete('/api/cronograma-actividades/:id', auth, requireRole('admin', 'coordi
   res.json({ ok: true });
 }));
 
+// Genera actividades a partir de las rotaciones YA CARGADAS (no crea duplicados si se corre
+// más de una vez: por cada día usa una sola actividad por sección, sin importar cuántos
+// alumnos estén rotando ahí ese día).
+app.post('/api/cronograma-actividades/generar', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
+  const { desde, hasta } = req.body || {};
+  if (!desde || !hasta) return res.status(400).json({ error: 'Rango de fechas requerido' });
+  const rotations = await allDocs('rotations');
+  const existentes = await allDocs('cronogramaActividades');
+  const existentesSet = new Set(existentes.map(a => a.fecha + '|' + a.sectionId));
+
+  const nuevas = [];
+  let cursor = desde;
+  while (cursor <= hasta) {
+    const sectionsActivas = new Set(rotations.filter(r => cursor >= r.startDate && cursor <= r.endDate).map(r => r.sectionId));
+    sectionsActivas.forEach(sectionId => {
+      const key = cursor + '|' + sectionId;
+      if (!existentesSet.has(key)) {
+        nuevas.push({ fecha: cursor, sectionId });
+        existentesSet.add(key);
+      }
+    });
+    cursor = addDays(cursor, 1);
+  }
+
+  const now = new Date().toISOString();
+  for (let i = 0; i < nuevas.length; i += 400) {
+    const chunk = nuevas.slice(i, i + 400);
+    const batch = db.batch();
+    chunk.forEach(n => {
+      const id = uid('act');
+      batch.set(db.collection('cronogramaActividades').doc(id), {
+        fecha: n.fecha, sectionId: n.sectionId, horaInicio: null, horaFin: null, observaciones: '',
+        createdBy: req.user.sub, createdByNombre: req.user.nombre, createdAt: now, generadaDesdeRotaciones: true
+      });
+    });
+    await batch.commit();
+  }
+  await logActivity(`${req.user.nombre} generó ${nuevas.length} actividades del Cronograma a partir de las rotaciones (${desde} a ${hasta}).`);
+  res.json({ creadas: nuevas.length });
+}));
+
 /* ---------------------------- portal del alumno (datos acotados a sí mismo) ---------------------------- */
 app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
   const studentId = req.user.studentId;
