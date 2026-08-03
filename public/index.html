@@ -717,8 +717,15 @@ function computeNotifications(){
   if(pendCount){
     list.push({type:'pendientes', icon:'alertTriangle', color:'amber', title:'Contenidos pendientes sin resolver', sub:pendCount+' registro'+(pendCount===1?'':'s')+' en Contenidos Pendientes'});
   }
+  if(session && session.role==='seccion'){
+    (DB.comunicados||[]).filter(c=>!c.miLectura).forEach(c=>{
+      const color = c.prioridad==='urgente'?'red':(c.prioridad==='importante'?'amber':'accent');
+      list.push({type:'comunicado', icon:'bell', color, title:'Nuevo lineamiento: '+c.titulo, sub:prioridadLabelPlain(c.prioridad)+(c.vencimiento? ' · Vence '+fmtDate(c.vencimiento) : '')});
+    });
+  }
   return list;
 }
+function prioridadLabelPlain(prioridad){ return {urgente:'Urgente', importante:'Importante', informativo:'Informativo'}[prioridad] || prioridad; }
 
 /* ---------------------------- auth (real: bcrypt + JWT contra el servidor) ---------------------------- */
 async function tryLogin(username, password){
@@ -1584,7 +1591,62 @@ function renderGuidelines(){
   <div class="section-card">
     <h3>Objetivos semanales ${canEdit? `<button class="btn btn-sm" data-action="add-objetivo">${icon('plus','icon-sm')} Agregar</button>`:''}</h3>
     ${objetivos.length? `<ul class="mono-list">${objetivos.slice().sort((a,b)=>a.semana-b.semana).map(o=>`<li><span><strong>Semana ${o.semana}:</strong> ${esc(o.texto)}</span>${canEdit?`<span class="tag-remove" data-action="del-objetivo" data-id="${o.id}">${icon('x','icon-sm')}</span>`:''}</li>`).join('')}</ul>` : `<div class="empty-state">Sin objetivos cargados</div>`}
-  </div>`;
+  </div>
+  ${renderComunicadosSection()}`;
+}
+function renderComunicadosSection(){
+  const comunicados = (DB.comunicados||[]).slice();
+  if(session.role==='admin' || session.role==='coordinador' || session.role==='viewadmin'){
+    const isViewAdmin = session.role==='viewadmin';
+    return `
+    <div class="section-card">
+      <h3>Comunicados enviados ${!isViewAdmin && session.role==='admin'? `<button class="btn btn-sm" data-action="new-comunicado">${icon('plus','icon-sm')} Nuevo lineamiento</button>`:''}</h3>
+      ${comunicados.length? `<div class="table-wrap" style="box-shadow:none;">
+        <table>
+          <thead><tr><th>Título</th><th>Prioridad</th><th>Destinatarios</th><th>Vencimiento</th><th>Leído</th><th>Enviado</th><th></th></tr></thead>
+          <tbody>
+          ${comunicados.map(c=>{
+            const destinatarios = comunicadoProfesoresDestino(c);
+            const leidos = destinatarios.filter(t=>(c.lecturas||{})[t.id]).length;
+            return `<tr>
+              <td class="cell-strong" style="cursor:pointer;" data-action="ver-comunicado" data-id="${c.id}">${esc(c.titulo)}</td>
+              <td>${prioridadBadge(c.prioridad)}</td>
+              <td class="cell-muted">${esc(comunicadoDestinatariosLabel(c))}</td>
+              <td class="cell-muted">${c.vencimiento? fmtDate(c.vencimiento) : '—'}</td>
+              <td>${leidos} / ${destinatarios.length}</td>
+              <td class="cell-muted">${fmtDate(c.createdAt.slice(0,10))}</td>
+              <td style="white-space:nowrap;">
+                <button class="btn btn-sm" data-action="ver-comunicado" data-id="${c.id}">${icon('file','icon-sm')} Ver</button>
+                ${session.role==='admin'? `<button class="btn btn-sm btn-danger" data-action="delete-comunicado" data-id="${c.id}">${icon('trash','icon-sm')}</button>`:''}
+              </td>
+            </tr>`;
+          }).join('')}
+          </tbody>
+        </table>
+        </div>` : `<div class="empty-state">Todavía no se envió ningún lineamiento individual.</div>`}
+    </div>`;
+  }
+  if(session.role==='seccion'){
+    return `
+    <div class="section-card">
+      <h3>Tus lineamientos</h3>
+      ${comunicados.length? comunicados.map(c=>`
+        <div style="border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:12px; ${!c.miLectura?'cursor:pointer;':''}" ${!c.miLectura?`data-action="abrir-comunicado" data-id="${c.id}"`:''}>
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+            <div style="font-weight:700; font-size:13.5px;">${esc(c.titulo)}</div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              ${prioridadBadge(c.prioridad)}
+              ${c.miLectura? '<span class="badge badge-green"><span class="badge-dot-ico"></span>Leído</span>' : '<span class="badge badge-amber"><span class="badge-dot-ico"></span>Pendiente</span>'}
+            </div>
+          </div>
+          ${c.descripcion? `<p style="margin-top:8px; font-size:13px;">${esc(c.descripcion)}</p>`:''}
+          ${(c.adjuntos||[]).length? `<div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">${c.adjuntos.map(a=>`<a href="${a.url}" target="_blank" rel="noopener" class="file-chip">${icon('paperclip','icon-sm')} ${esc(a.nombre)}</a>`).join('')}</div>`:''}
+          <div class="cell-muted" style="font-size:11.5px; margin-top:8px;">${c.vencimiento? 'Vence '+fmtDate(c.vencimiento)+' · ':''}Enviado por ${esc(c.createdByNombre)} el ${fmtDate(c.createdAt.slice(0,10))}${c.miLectura? ' · Leído el '+fmtDate(c.miLectura.fecha)+' a las '+esc(c.miLectura.hora) : ''}</div>
+          ${!c.miLectura? `<button class="btn btn-sm btn-primary" style="margin-top:10px;" data-action="abrir-comunicado" data-id="${c.id}">${icon('check','icon-sm')} Marcar como leído</button>`:''}
+        </div>`).join('') : `<div class="empty-state">No tenés lineamientos individuales por ahora.</div>`}
+    </div>`;
+  }
+  return '';
 }
 
 /* ---------------------------- REPORTS ---------------------------- */
@@ -2323,6 +2385,8 @@ function renderModal(){
   else if(m.type==='cronograma-edit-form'){ title='Editar rotación en el cronograma'; body = cronogramaEditFormHtml(m.data); }
   else if(m.type==='cronograma-add-form'){ title='Nueva rotación'; body = cronogramaAddFormHtml(m.data); }
   else if(m.type==='usuario-form'){ title = m.data? 'Editar VIEW ADMIN':'Nuevo VIEW ADMIN'; body = usuarioFormHtml(m.data); }
+  else if(m.type==='comunicado-form'){ title='Nuevo lineamiento'; wide=true; body = comunicadoFormHtml(); }
+  else if(m.type==='comunicado-detalle'){ title='Estado de lectura'; wide=true; body = comunicadoDetalleHtml(m.data); }
 
   return `
   <div class="modal-overlay" data-action="close-modal-bg">
@@ -2330,8 +2394,8 @@ function renderModal(){
       <div class="modal-head"><h3>${title}</h3><button class="icon-btn" data-action="close-modal" aria-label="Cerrar">${icon('x','icon-sm')}</button></div>
       <div class="modal-body">${body}</div>
       <div class="modal-foot">
-        <button class="btn" data-action="close-modal">Cancelar</button>
-        <button class="btn btn-primary" data-action="submit-modal" data-type="${m.type}" data-id="${m.data&&m.data.id?m.data.id:''}">Guardar</button>
+        <button class="btn" data-action="close-modal">${m.type==='comunicado-detalle'?'Cerrar':'Cancelar'}</button>
+        ${m.type!=='comunicado-detalle'? `<button class="btn btn-primary" data-action="submit-modal" data-type="${m.type}" data-id="${m.data&&m.data.id?m.data.id:''}">Guardar</button>` : ''}
       </div>
     </div>
   </div>`;
@@ -2495,6 +2559,91 @@ function rotationFormHtml(r){
 
 function guidelinesFormHtml(){
   return `<div class="field"><label>Lineamientos generales</label><textarea class="input" id="f-lineamientos" style="min-height:140px;">${esc(DB.config.lineamientos)}</textarea></div>`;
+}
+
+/* ---------------------------- COMUNICADOS (lineamientos individuales) ---------------------------- */
+function prioridadBadge(prioridad){
+  const map = { urgente:['red','Urgente'], importante:['amber','Importante'], informativo:['accent','Informativo'] };
+  const [c,l] = map[prioridad] || ['neutral', prioridad];
+  return `<span class="badge badge-${c}"><span class="badge-dot-ico"></span>${l}</span>`;
+}
+function comunicadoDestinatariosLabel(c){
+  if(c.destinatarioTipo==='todos') return 'Todos los profesores';
+  return (c.destinatarios||[]).map(tid=>teacherName(tid)).join(', ') || '—';
+}
+function comunicadoProfesoresDestino(c){
+  if(c.destinatarioTipo==='todos') return DB.teachers.filter(t=>t.rol==='seccion');
+  return (c.destinatarios||[]).map(tid=>DB.teachers.find(t=>t.id===tid)).filter(Boolean);
+}
+function comunicadoFormHtml(){
+  const profesores = DB.teachers.filter(t=>t.rol==='seccion');
+  return `
+  <div class="field"><label>Título</label><input class="input" id="f-com-titulo" placeholder="ej. Nuevo protocolo de asistencia"></div>
+  <div class="field"><label>Descripción</label><textarea class="input" id="f-com-descripcion" style="min-height:100px;"></textarea></div>
+  <div class="field-row">
+    <div class="field"><label>Prioridad</label>
+      <select class="select" id="f-com-prioridad" style="width:100%;">
+        <option value="informativo">Informativo</option>
+        <option value="importante">Importante</option>
+        <option value="urgente">Urgente</option>
+      </select>
+    </div>
+    <div class="field"><label>Fecha de vencimiento (opcional)</label><input class="input" type="date" id="f-com-vencimiento"></div>
+  </div>
+  <div class="field">
+    <label>Destinatarios</label>
+    <select class="select" id="f-com-destino" style="width:100%;" data-action="com-destino-tipo">
+      <option value="todos">Todos los profesores</option>
+      <option value="elegir">Elegir profesores (uno o varios)</option>
+    </select>
+  </div>
+  <div class="field" id="f-com-profesores-wrap" style="display:none;">
+    <label>Profesores destinatarios</label>
+    <div style="max-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--r-sm); padding:8px 10px;">
+      ${profesores.length? profesores.map(t=>`
+        <label style="display:flex; align-items:center; gap:8px; padding:5px 0; cursor:pointer; font-size:13px;">
+          <input type="checkbox" class="f-com-profesor-check" value="${t.id}" style="width:15px; height:15px;"> ${esc(t.nombre)}
+        </label>`).join('') : `<p class="cell-muted" style="font-size:12.5px;">No hay profesores de sección cargados.</p>`}
+    </div>
+  </div>
+  <div class="field">
+    <label>Adjuntar archivos (opcional)</label>
+    <label class="file-drop" for="f-com-files" id="f-com-files-label">
+      ${icon('upload')}
+      <div id="f-com-files-text">Hacé clic para seleccionar uno o más archivos</div>
+    </label>
+    <input type="file" id="f-com-files" multiple style="display:none;">
+    <div id="f-com-progress-wrap" style="display:none; margin-top:8px;"><div class="bar-track"><div class="bar-fill" id="f-com-progress-bar" style="width:0%;"></div></div></div>
+  </div>
+  `;
+}
+function comunicadoDetalleHtml(c){
+  const destinatarios = comunicadoProfesoresDestino(c);
+  const leidos = destinatarios.filter(t=>(c.lecturas||{})[t.id]).length;
+  return `
+  <div class="kv" style="margin-bottom:14px;">
+    <dt>Título</dt><dd>${esc(c.titulo)}</dd>
+    <dt>Prioridad</dt><dd>${prioridadBadge(c.prioridad)}</dd>
+    <dt>Enviado</dt><dd>${fmtDate(c.createdAt.slice(0,10))} · ${esc(c.createdByNombre)}</dd>
+    <dt>Leído por</dt><dd>${leidos} / ${destinatarios.length}</dd>
+  </div>
+  <div class="table-wrap" style="box-shadow:none;">
+  <table>
+    <thead><tr><th>Profesor</th><th>Estado</th><th>Fecha</th><th>Hora</th></tr></thead>
+    <tbody>
+    ${destinatarios.length? destinatarios.map(t=>{
+      const lect = (c.lecturas||{})[t.id];
+      return `<tr>
+        <td class="cell-strong">${esc(t.nombre)}</td>
+        <td>${lect? '<span class="badge badge-green"><span class="badge-dot-ico"></span>Leído</span>' : '<span class="badge badge-amber"><span class="badge-dot-ico"></span>Pendiente</span>'}</td>
+        <td>${lect? fmtDate(lect.fecha) : '—'}</td>
+        <td class="cell-muted">${lect? esc(lect.hora) : '—'}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="4"><div class="empty-state">Sin destinatarios</div></td></tr>`}
+    </tbody>
+  </table>
+  </div>
+  `;
 }
 
 function pendienteFormHtml(){
@@ -2867,6 +3016,18 @@ function attachGlobalEvents(){
     }
     else if(action==='del-consigna'){ try{ await apiFetch('DELETE','/api/consignas/'+id); await loadDB(); render(); }catch(e){ toast(e.message||'Error','red'); } }
     else if(action==='del-objetivo'){ try{ await apiFetch('DELETE','/api/objetivos/'+id); await loadDB(); render(); }catch(e){ toast(e.message||'Error','red'); } }
+    else if(action==='new-comunicado'){ ui.modal={type:'comunicado-form', data:null}; render(); }
+    else if(action==='ver-comunicado'){ ui.modal={type:'comunicado-detalle', data:(DB.comunicados||[]).find(c=>c.id===id)}; render(); }
+    else if(action==='abrir-comunicado'){
+      try{ await apiFetch('POST','/api/comunicados/'+id+'/leido',{}); await loadDB(); render(); }
+      catch(e){ toast(e.message||'No se pudo marcar como leído','red'); }
+    }
+    else if(action==='delete-comunicado'){
+      askConfirm({
+        title:'Eliminar lineamiento', message:'¿Eliminar este lineamiento? Los profesores ya no podrán verlo.', confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{ try{ await apiFetch('DELETE','/api/comunicados/'+id); await loadDB(); toast('Lineamiento eliminado'); }catch(e){ toast(e.message||'Error','red'); } }
+      });
+    }
     else if(action==='close-modal' || action==='close-modal-bg'){ if(action==='close-modal-bg' && e.target!==t){ /* clic dentro del modal, no cerrar */ } else { ui.modal=null; render(); } }
     else if(action==='add-informe-semanal'){ addInformeSemanal(id); }
     else if(action==='export-student-pdf'){ exportStudentPDF(id); }
@@ -2876,6 +3037,7 @@ function attachGlobalEvents(){
     else if(action==='submit-modal'){
       const type = t.getAttribute('data-type');
       if(type==='documento-form') await uploadDocumento();
+      else if(type==='comunicado-form') await uploadComunicado();
       else await submitModal(action, type, t.getAttribute('data-id'));
     }
     else if(action==='sort-th'){
@@ -2934,6 +3096,15 @@ function attachGlobalEvents(){
       const f = t.files && t.files[0];
       const textEl = document.getElementById('f-doc-file-text');
       if(f && textEl) textEl.textContent = f.name;
+    }
+    else if(t.matches('[data-action="com-destino-tipo"]')){
+      const wrap = document.getElementById('f-com-profesores-wrap');
+      if(wrap) wrap.style.display = t.value==='elegir' ? 'block' : 'none';
+    }
+    else if(t.id==='f-com-files'){
+      const files = t.files;
+      const textEl = document.getElementById('f-com-files-text');
+      if(textEl) textEl.textContent = files.length? files.length+' archivo'+(files.length===1?'':'s')+' seleccionado'+(files.length===1?'':'s')+': '+Array.from(files).map(f=>f.name).join(', ') : 'Hacé clic para seleccionar uno o más archivos';
     }
     else if(t.id==='sp-doc-file'){
       const f = t.files && t.files[0];
@@ -3075,6 +3246,60 @@ async function uploadDocumento(){
     toast('Documento subido correctamente');
   }catch(e){
     toast(e.message||'No se pudo subir el archivo', 'red');
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Guardar'; }
+    if(progressWrap) progressWrap.style.display='none';
+  }
+}
+
+async function uploadComunicado(){
+  const titulo = document.getElementById('f-com-titulo').value.trim();
+  if(!titulo){ toast('Ponele un título al lineamiento','red'); return; }
+  const descripcion = document.getElementById('f-com-descripcion').value.trim();
+  const prioridad = document.getElementById('f-com-prioridad').value;
+  const vencimiento = document.getElementById('f-com-vencimiento').value || '';
+  const destinoTipo = document.getElementById('f-com-destino').value;
+  const checked = Array.from(document.querySelectorAll('.f-com-profesor-check:checked')).map(c=>c.value);
+  if(destinoTipo==='elegir' && !checked.length){ toast('Elegí al menos un profesor destinatario','red'); return; }
+  const destinatarioTipo = destinoTipo==='todos' ? 'todos' : (checked.length===1? 'especifico' : 'varios');
+
+  const fd = new FormData();
+  fd.append('titulo', titulo);
+  fd.append('descripcion', descripcion);
+  fd.append('prioridad', prioridad);
+  fd.append('destinatarioTipo', destinatarioTipo);
+  fd.append('destinatarios', JSON.stringify(destinoTipo==='todos'? [] : checked));
+  if(vencimiento) fd.append('vencimiento', vencimiento);
+  const files = document.getElementById('f-com-files').files;
+  Array.from(files).forEach(f=> fd.append('adjuntos', f));
+
+  const progressWrap = document.getElementById('f-com-progress-wrap');
+  const progressBar = document.getElementById('f-com-progress-bar');
+  if(progressWrap) progressWrap.style.display='block';
+  const saveBtn = document.querySelector('[data-action="submit-modal"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Enviando…'; }
+
+  try{
+    await new Promise((resolve, reject)=>{
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', API_BASE+'/api/comunicados');
+      xhr.setRequestHeader('Authorization', 'Bearer '+authToken);
+      xhr.upload.onprogress = (e)=>{
+        if(e.lengthComputable && progressBar){ progressBar.style.width = Math.round((e.loaded/e.total)*100)+'%'; }
+      };
+      xhr.onload = ()=>{
+        if(xhr.status>=200 && xhr.status<300) resolve();
+        else if(xhr.status===401) reject(new Error(handleSessionExpired()));
+        else{ let msg='No se pudo enviar el lineamiento'; try{ msg = JSON.parse(xhr.responseText).error||msg; }catch(e){} reject(new Error(msg)); }
+      };
+      xhr.onerror = ()=> reject(new Error('Error de conexión al enviar el lineamiento'));
+      xhr.send(fd);
+    });
+    ui.modal = null;
+    await loadDB();
+    render();
+    toast('Lineamiento enviado correctamente');
+  }catch(e){
+    toast(e.message||'No se pudo enviar el lineamiento', 'red');
     if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Guardar'; }
     if(progressWrap) progressWrap.style.display='none';
   }
