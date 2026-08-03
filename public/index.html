@@ -378,6 +378,17 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 .cron-cell-addable{cursor:pointer; color:var(--text-3); font-size:15px; font-weight:700; text-align:center; transition:background .12s var(--ease), color .12s var(--ease);}
 .cron-cell-addable:hover{background:var(--accent-softer) !important; color:var(--accent);}
 .cron-cell-bar{height:100%; border-radius:5px; min-height:22px; position:relative;}
+
+/* ---------------------------- Cronograma de Actividades (calendario mensual, módulo nuevo) ---------------------------- */
+.act-cal-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:6px;}
+.act-cal-head{font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-3); font-weight:700; text-align:center; padding-bottom:4px;}
+.act-cal-day{border:1px solid var(--border); border-radius:var(--r-sm); min-height:92px; padding:6px; background:var(--surface); cursor:pointer; transition:background .12s var(--ease), border-color .12s var(--ease); display:flex; flex-direction:column; gap:2px;}
+.act-cal-day:hover{background:var(--surface-2); border-color:var(--border-strong);}
+.act-cal-day.act-cal-outside{opacity:.4;}
+.act-cal-day.act-cal-today{border-color:var(--accent); box-shadow:0 0 0 1.5px var(--accent);}
+.act-cal-daynum{font-size:12px; font-weight:650; color:var(--text-2); margin-bottom:2px;}
+.act-cal-bar{font-size:10.5px; padding:2px 5px; border-radius:4px; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600;}
+.act-cal-more{font-size:10px; color:var(--text-3); font-weight:700; padding:1px 5px;}
 .cron-attend-dot{position:absolute; top:1px; right:1px; width:11px; height:11px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 1.5px var(--surface);}
 .cron-attend-dot .icon{width:8px; height:8px; stroke-width:3.5;}
 .cron-attend-ok{background:var(--green); color:#fff;}
@@ -422,7 +433,7 @@ let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, m
   sort:{ students:{key:'legajo',dir:'asc'}, rotations:{key:'periodo',dir:'asc'}, documentosAlumno:{key:'fecha',dir:'desc'} },
   page:{ students:1, rotations:1, documentosAlumno:1 },
   sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
-  cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'' };
+  cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7) };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -936,6 +947,7 @@ function renderShell(){
         ${navItem('reports','file','Informes', ['admin','coordinador','viewadmin'])}
         <div class="nav-section-label">Sistema</div>
         ${navItem('cronograma','calendar','Cronograma de Rotaciones', ['admin','coordinador','viewadmin'])}
+        ${navItem('cronograma-actividades','calendar','Cronograma de Actividades', ['admin','coordinador','viewadmin'])}
         ${navItem('planillas','file','Planillas Digitales FAT', ['admin','seccion','viewadmin'])}
         ${navItem('documentos','file','Centro de Documentos', ['admin','viewadmin'])}
         ${navItem('usuarios','users','Gestión de Usuarios', ['admin'])}
@@ -1007,6 +1019,7 @@ function renderView(){
     case 'guidelines': return renderGuidelines();
     case 'reports': return renderReports();
     case 'cronograma': return (session.role==='admin'||session.role==='coordinador'||session.role==='viewadmin') ? renderCronograma() : renderDashboard();
+    case 'cronograma-actividades': return (session.role==='admin'||session.role==='coordinador'||session.role==='viewadmin') ? renderCronogramaActividades() : renderDashboard();
     case 'planillas': return (session.role==='admin'||session.role==='seccion'||session.role==='viewadmin') ? renderPlanillas() : renderDashboard();
     case 'planilla-detalle': return renderPlanillaDetalle();
     case 'documentos': return (session.role==='admin'||session.role==='viewadmin') ? renderDocumentos() : renderDashboard();
@@ -1826,6 +1839,123 @@ function renderCronograma(){
   `;
 }
 
+/* ---------------------------- CRONOGRAMA DE ACTIVIDADES (calendario mensual, módulo nuevo e independiente) ---------------------------- */
+function actividadesDelDia(fecha){
+  return (DB.cronogramaActividades||[]).filter(a=>a.fecha===fecha).sort((a,b)=>(a.horaInicio||'99:99').localeCompare(b.horaInicio||'99:99'));
+}
+function actMesLabel(mes){
+  const [y,m] = mes.split('-').map(Number);
+  return new Date(y, m-1, 1).toLocaleDateString('es-AR', { month:'long', year:'numeric' });
+}
+function actAddMonths(mes, n){
+  const [y,m] = mes.split('-').map(Number);
+  const d = new Date(y, m-1+n, 1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function renderCronogramaActividades(){
+  const isAdmin = session.role==='admin' || session.role==='coordinador';
+  const [y,m] = ui.actCalMes.split('-').map(Number);
+  const firstOfMonth = ui.actCalMes+'-01';
+  const lastDay = new Date(y, m, 0).getDate();
+  const lastOfMonth = ui.actCalMes+'-'+String(lastDay).padStart(2,'0');
+  const gridStart = mondayOf(firstOfMonth);
+  const gridEndBase = mondayOf(lastOfMonth);
+  const gridEnd = addDays(gridEndBase, 6);
+  const today = todayISO();
+
+  const days = [];
+  let cursor = gridStart;
+  while(cursor<=gridEnd){ days.push(cursor); cursor = addDays(cursor,1); }
+  const dayNames = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Cronograma de Actividades</h1><p class="page-sub">Actividades por día, independiente de las rotaciones de los alumnos</p></div>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <button class="btn btn-sm" data-action="act-cal-nav" data-dir="prev">${icon('chevronLeft','icon-sm')}</button>
+      <span class="cell-strong" style="min-width:150px; text-align:center; text-transform:capitalize;">${actMesLabel(ui.actCalMes)}</span>
+      <button class="btn btn-sm" data-action="act-cal-nav" data-dir="next">${icon('chevronRight','icon-sm')}</button>
+      <button class="btn btn-sm" data-action="act-cal-hoy">Hoy</button>
+    </div>
+  </div>
+  <div style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:14px;">
+    ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`
+      <div class="cron-legend-item"><span class="cron-legend-swatch" style="background:${sectionColor(s.id)};"></span>${esc(s.nombre)}</div>`).join('')}
+  </div>
+  <div class="act-cal-grid" style="margin-bottom:6px;">
+    ${dayNames.map(d=>`<div class="act-cal-head">${d}</div>`).join('')}
+  </div>
+  <div class="act-cal-grid">
+    ${days.map(fecha=>{
+      const isOutside = fecha<firstOfMonth || fecha>lastOfMonth;
+      const isToday = fecha===today;
+      const acts = actividadesDelDia(fecha);
+      const shown = acts.slice(0,3);
+      const extra = acts.length-shown.length;
+      const dayNum = Number(fecha.slice(8,10));
+      const tooltip = acts.length
+        ? 'Actividades del '+fmtDate(fecha)+':\n'+acts.map(a=>'• '+sectionName(a.sectionId)+(a.horaInicio||a.horaFin? ' ('+(a.horaInicio||'—')+' a '+(a.horaFin||'—')+')':'')+(a.observaciones? ' — '+a.observaciones:'')).join('\n')
+        : 'Sin actividades el '+fmtDate(fecha);
+      return `<div class="act-cal-day ${isOutside?'act-cal-outside':''} ${isToday?'act-cal-today':''}" data-action="act-day-click" data-fecha="${fecha}" title="${esc(tooltip)}">
+        <div class="act-cal-daynum">${dayNum}</div>
+        ${shown.map(a=>`<div class="act-cal-bar" style="background:${sectionColor(a.sectionId)};">${esc(sectionName(a.sectionId))}</div>`).join('')}
+        ${extra>0? `<div class="act-cal-more">+${extra}</div>` : ''}
+      </div>`;
+    }).join('')}
+  </div>
+  <p class="help-text" style="margin-top:10px;">Pasá el mouse sobre un día para ver el detalle sin abrir nada. Un clic abre la vista del día${isAdmin? '; doble clic abre el editor.':'.'}</p>
+  `;
+}
+function actividadDiaListHtml(fecha, editable){
+  const acts = actividadesDelDia(fecha);
+  return `
+  <p class="cell-muted" style="font-size:12.5px; margin-bottom:10px;">${fmtDate(fecha)}</p>
+  ${acts.length? acts.map(a=>`
+    <div style="border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+      <div>
+        <div style="font-weight:650; font-size:13px; display:flex; align-items:center; gap:7px;">${sectionDot(a.sectionId)} ${esc(sectionName(a.sectionId))}</div>
+        ${(a.horaInicio||a.horaFin)? `<div class="cell-muted" style="font-size:12px; margin-top:2px;">${icon('clock','icon-sm')} ${a.horaInicio||'—'} a ${a.horaFin||'—'}</div>`:''}
+        ${a.observaciones? `<div style="font-size:12.5px; margin-top:4px;">${esc(a.observaciones)}</div>`:''}
+      </div>
+      ${editable? `<div style="display:flex; gap:4px; flex-shrink:0;">
+        <button class="btn btn-ghost btn-sm" data-action="edit-actividad" data-id="${a.id}">${icon('edit','icon-sm')}</button>
+        <button class="btn btn-ghost btn-sm" data-action="delete-actividad" data-id="${a.id}">${icon('trash','icon-sm')}</button>
+      </div>`:''}
+    </div>`).join('') : `<div class="empty-state" style="padding:20px;"><div class="em-icon">${icon('calendar')}</div><div class="em-title">Sin actividades este día</div></div>`}
+  `;
+}
+function actividadDiaDetalleHtml(data){
+  return `
+  ${actividadDiaListHtml(data.fecha, false)}
+  ${(session.role==='admin'||session.role==='coordinador')? `<button class="btn btn-primary btn-sm" data-action="editar-dia-actividad" data-fecha="${data.fecha}">${icon('edit','icon-sm')} Editar este día</button>`:''}
+  `;
+}
+function actividadDiaEditorHtml(data){
+  const editing = data.editingId? (DB.cronogramaActividades||[]).find(a=>a.id===data.editingId) : null;
+  return `
+  ${actividadDiaListHtml(data.fecha, true)}
+  <div class="section-card" style="background:var(--surface-2); margin-top:14px;">
+    <h3 style="font-size:13px;">${editing? 'Editar actividad':'Agregar actividad'}</h3>
+    <input type="hidden" id="f-act-fecha" value="${data.fecha}">
+    <input type="hidden" id="f-act-editing-id" value="${editing? editing.id:''}">
+    <div class="field"><label>Sección</label>
+      <select class="select" id="f-act-seccion" style="width:100%;">
+        ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`<option value="${s.id}" ${editing&&editing.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Hora de inicio (opcional)</label><input class="input" type="time" id="f-act-hora-inicio" value="${editing&&editing.horaInicio?editing.horaInicio:''}"></div>
+      <div class="field"><label>Hora de finalización (opcional)</label><input class="input" type="time" id="f-act-hora-fin" value="${editing&&editing.horaFin?editing.horaFin:''}"></div>
+    </div>
+    <div class="field"><label>Observaciones (opcional)</label><textarea class="input" id="f-act-observaciones">${editing?esc(editing.observaciones||''):''}</textarea></div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-primary btn-sm" data-action="save-actividad">${editing? icon('check','icon-sm')+' Guardar cambios' : icon('plus','icon-sm')+' Agregar actividad'}</button>
+      ${editing? `<button class="btn btn-sm" data-action="cancel-edit-actividad">Cancelar</button>`:''}
+    </div>
+  </div>
+  `;
+}
+
 function cronogramaEditFormHtml(rot){
   const student = DB.students.find(s=>s.id===rot.studentId);
   let asistenciaPanel = '';
@@ -2387,6 +2517,8 @@ function renderModal(){
   else if(m.type==='usuario-form'){ title = m.data? 'Editar VIEW ADMIN':'Nuevo VIEW ADMIN'; body = usuarioFormHtml(m.data); }
   else if(m.type==='comunicado-form'){ title='Nuevo lineamiento'; wide=true; body = comunicadoFormHtml(); }
   else if(m.type==='comunicado-detalle'){ title='Estado de lectura'; wide=true; body = comunicadoDetalleHtml(m.data); }
+  else if(m.type==='actividad-dia-detalle'){ title='Actividades del día'; body = actividadDiaDetalleHtml(m.data); }
+  else if(m.type==='actividad-dia-editor'){ title='Editar actividades del día'; wide=true; body = actividadDiaEditorHtml(m.data); }
 
   return `
   <div class="modal-overlay" data-action="close-modal-bg">
@@ -2394,8 +2526,8 @@ function renderModal(){
       <div class="modal-head"><h3>${title}</h3><button class="icon-btn" data-action="close-modal" aria-label="Cerrar">${icon('x','icon-sm')}</button></div>
       <div class="modal-body">${body}</div>
       <div class="modal-foot">
-        <button class="btn" data-action="close-modal">${m.type==='comunicado-detalle'?'Cerrar':'Cancelar'}</button>
-        ${m.type!=='comunicado-detalle'? `<button class="btn btn-primary" data-action="submit-modal" data-type="${m.type}" data-id="${m.data&&m.data.id?m.data.id:''}">Guardar</button>` : ''}
+        <button class="btn" data-action="close-modal">${['comunicado-detalle','actividad-dia-detalle','actividad-dia-editor'].includes(m.type)?'Cerrar':'Cancelar'}</button>
+        ${!['comunicado-detalle','actividad-dia-detalle','actividad-dia-editor'].includes(m.type)? `<button class="btn btn-primary" data-action="submit-modal" data-type="${m.type}" data-id="${m.data&&m.data.id?m.data.id:''}">Guardar</button>` : ''}
       </div>
     </div>
   </div>`;
@@ -3028,6 +3160,39 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{ try{ await apiFetch('DELETE','/api/comunicados/'+id); await loadDB(); toast('Lineamiento eliminado'); }catch(e){ toast(e.message||'Error','red'); } }
       });
     }
+    else if(action==='act-cal-nav'){ ui.actCalMes = actAddMonths(ui.actCalMes, t.getAttribute('data-dir')==='next'?1:-1); render(); }
+    else if(action==='act-cal-hoy'){ ui.actCalMes = todayISO().slice(0,7); render(); }
+    else if(action==='act-day-click'){
+      const fecha = t.getAttribute('data-fecha');
+      clearTimeout(window.__actClickTimer);
+      window.__actClickTimer = setTimeout(()=>{ ui.modal={type:'actividad-dia-detalle', data:{fecha}}; render(); }, 230);
+    }
+    else if(action==='editar-dia-actividad'){ ui.modal={type:'actividad-dia-editor', data:{fecha:t.getAttribute('data-fecha')}}; render(); }
+    else if(action==='edit-actividad'){ ui.modal={type:'actividad-dia-editor', data:{fecha:ui.modal.data.fecha, editingId:id}}; render(); }
+    else if(action==='cancel-edit-actividad'){ ui.modal={type:'actividad-dia-editor', data:{fecha:ui.modal.data.fecha}}; render(); }
+    else if(action==='delete-actividad'){
+      askConfirm({
+        title:'Eliminar actividad', message:'¿Eliminar esta actividad del día?', confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/cronograma-actividades/'+id); await loadDB(); render(); toast('Actividad eliminada'); }
+          catch(e){ toast(e.message||'Error','red'); }
+        }
+      });
+    }
+    else if(action==='save-actividad'){
+      const fecha = val('f-act-fecha'); const editingId = val('f-act-editing-id');
+      const sectionId = val('f-act-seccion'); const horaInicio = val('f-act-hora-inicio'); const horaFin = val('f-act-hora-fin');
+      const observaciones = val('f-act-observaciones');
+      if(!sectionId){ toast('Elegí una sección','red'); return; }
+      try{
+        if(editingId) await apiFetch('PUT','/api/cronograma-actividades/'+editingId, {fecha, sectionId, horaInicio, horaFin, observaciones});
+        else await apiFetch('POST','/api/cronograma-actividades', {fecha, sectionId, horaInicio, horaFin, observaciones});
+        await loadDB();
+        ui.modal={type:'actividad-dia-editor', data:{fecha}};
+        render();
+        toast(editingId? 'Actividad actualizada':'Actividad agregada');
+      }catch(e){ toast(e.message||'No se pudo guardar la actividad','red'); }
+    }
     else if(action==='close-modal' || action==='close-modal-bg'){ if(action==='close-modal-bg' && e.target!==t){ /* clic dentro del modal, no cerrar */ } else { ui.modal=null; render(); } }
     else if(action==='add-informe-semanal'){ addInformeSemanal(id); }
     else if(action==='export-student-pdf'){ exportStudentPDF(id); }
@@ -3062,6 +3227,15 @@ function attachGlobalEvents(){
       const target = t.getAttribute('data-tab');
       tabpanels.forEach(p=>{ p.style.display = p.getAttribute('data-tabpanel')===target ? '' : 'none'; });
     }
+  });
+
+  app.addEventListener('dblclick', (e)=>{
+    const t = e.target.closest('[data-action="act-day-click"]');
+    if(!t) return;
+    if(!(session.role==='admin'||session.role==='coordinador')) return;
+    clearTimeout(window.__actClickTimer);
+    ui.modal = {type:'actividad-dia-editor', data:{fecha:t.getAttribute('data-fecha')}};
+    render();
   });
 
   app.addEventListener('change', async (e)=>{
