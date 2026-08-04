@@ -5,10 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+<!-- Carga no bloqueante: la fuente no retrasa el primer render; el navegador usa una fuente del
+     sistema hasta que Google Fonts termina de llegar (misma técnica recomendada por web.dev). -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"></noscript>
 <title>FAT Manager</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<meta name="description" content="FAT Manager: sistema de gestión de pasantías y rotaciones para Formación en Ambiente de Trabajo (FAT).">
+<!-- jsPDF y XLSX se cargan bajo demanda (ver loadJsPDF/loadXLSX) recién cuando se usa una exportación,
+     en vez de en cada carga de página — evita bloquear el primer renderizado con ~300KB que la mayoría
+     de las sesiones nunca llega a usar. -->
+<script>
+  function loadScriptOnce(src){
+    return new Promise((resolve, reject)=>{
+      const existing = document.querySelector('script[data-lazy="'+src+'"]');
+      if(existing){ if(existing.dataset.loaded==='1') resolve(); else existing.addEventListener('load', ()=>resolve()); return; }
+      const s = document.createElement('script');
+      s.src = src; s.dataset.lazy = src;
+      s.onload = ()=>{ s.dataset.loaded='1'; resolve(); };
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  function loadJsPDF(){ return loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'); }
+  function loadXLSX(){ return loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'); }
+</script>
 <style>
 :root[data-theme="light"]{
   /* brand */
@@ -16,11 +37,11 @@
   /* surfaces */
   --bg:#F8FAFC; --surface:#FFFFFF; --surface-2:#F1F5F9; --border:#E5E7EB; --border-strong:#D1D5DB;
   /* text */
-  --text:#111827; --text-2:#6B7280; --text-3:#9CA3AF;
+  --text:#111827; --text-2:#6B7280; --text-3:#666B74;
   /* status */
-  --green:#22C55E; --green-soft:#DCFCE7; --green-2:#16A34A;
+  --green:#22C55E; --green-soft:#DCFCE7; --green-2:#15803D;
   --amber:#F59E0B; --amber-soft:#FEF3C7; --amber-2:#B45309;
-  --red:#EF4444; --red-soft:#FEE2E2; --red-2:#DC2626;
+  --red:#EF4444; --red-soft:#FEE2E2; --red-2:#B91C1C;
   /* elevation */
   --shadow-xs:0 1px 2px rgba(17,24,39,.04);
   --shadow-sm:0 1px 3px rgba(30,41,89,.06), 0 1px 2px rgba(30,41,89,.04);
@@ -32,7 +53,7 @@
 :root[data-theme="dark"]{
   --accent:#60A5FA; --accent-2:#3B82F6; --accent-soft:#1E3A6B; --accent-softer:#16233F;
   --bg:#0B1220; --surface:#111A2C; --surface-2:#17223A; --border:#22304C; --border-strong:#2E3F60;
-  --text:#EEF2FA; --text-2:#9AA7C2; --text-3:#6B7A99;
+  --text:#EEF2FA; --text-2:#9AA7C2; --text-3:#7C8AA8;
   --green:#4ADE80; --green-soft:#123321; --green-2:#22C55E;
   --amber:#FBBF24; --amber-soft:#3A2A0C; --amber-2:#F59E0B;
   --red:#F87171; --red-soft:#3A1518; --red-2:#EF4444;
@@ -816,7 +837,7 @@ function renderStudentPortalPage(){
       <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema" aria-label="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
       <button class="btn btn-sm" data-action="logout" aria-label="Cerrar sesión">${icon('logout','icon-sm')} Salir</button>
     </div>
-    <div class="content" style="max-width:760px; margin:0 auto;">
+    <main class="content" style="max-width:760px; margin:0 auto;">
       <div class="page-head">
         <div><h1 class="page-title">Hola, ${esc(SP.student.nombre)} 👋</h1><p class="page-sub">${esc(SP.student.curso)} "${esc(SP.student.division)}" · Legajo ${esc(SP.student.legajo)}${wk? ' · Semana '+wk+' / '+SP.totalWeeks : ''}</p></div>
       </div>
@@ -864,7 +885,7 @@ function renderStudentPortalPage(){
           <input type="hidden" id="sp-doc-name" value="${(misRespuestas&&misRespuestas.documentoNombre)||''}">
         </div>
 
-        <div class="field"><label>Observaciones</label><textarea class="input" id="sp-observacion" placeholder="Escribí acá cualquier comentario sobre esta semana..." style="min-height:110px;">${misRespuestas?esc(misRespuestas.observacion||''):''}</textarea></div>
+        <div class="field"><label for="sp-observacion">Observaciones</label><textarea class="input" id="sp-observacion" placeholder="Escribí acá cualquier comentario sobre esta semana..." style="min-height:110px;">${misRespuestas?esc(misRespuestas.observacion||''):''}</textarea></div>
 
         <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:2px;" data-action="submit-student-respuesta" data-rotation-id="${c.id}" data-semana="${wk}">${icon('check','icon-sm')} Guardar respuesta de esta semana</button>
       </div>
@@ -891,7 +912,7 @@ function renderStudentPortalPage(){
           }).join('')}
         </div>
       </div>
-    </div>
+    </main>
   </div>
   ${ui.modal? renderModal() : ''}
   ${ui.confirm? renderConfirmModal() : ''}
@@ -910,11 +931,11 @@ function renderLogin(err){
       </div>
       ${err?`<div class="error-msg">${icon('alertTriangle','icon-sm')} ${esc(err)}</div>`:''}
       <div class="field">
-        <label>Usuario</label>
+        <label for="login-user">Usuario</label>
         <input class="input" name="username" id="login-user" autocomplete="username">
       </div>
       <div class="field">
-        <label>Contraseña</label>
+        <label for="login-pass">Contraseña</label>
         <input class="input" type="password" name="password" id="login-pass" autocomplete="current-password">
       </div>
       <button class="btn btn-primary" style="width:100%; justify-content:center;" type="button" id="login-submit">Iniciar sesión</button>
@@ -978,16 +999,16 @@ function renderShell(){
         <button class="icon-btn" style="display:none" id="hamburger" data-action="toggle-sidebar" aria-label="Abrir menú">${icon('menu','icon-sm')}</button>
         <div class="search-wrap">
           <span class="search-icon">${icon('search','icon-sm')}</span>
-          <input class="search-input" id="global-search" placeholder="Buscar alumno por nombre, DNI o legajo…" value="${esc(ui.search)}">
+          <input class="search-input" id="global-search" aria-label="Buscar alumno por nombre, DNI o legajo" placeholder="Buscar alumno por nombre, DNI o legajo…" value="${esc(ui.search)}">
         </div>
         <div class="topbar-spacer"></div>
         <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema" aria-label="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
         <button class="icon-btn" data-action="toggle-notif" title="Notificaciones" aria-label="Notificaciones">${icon('bell','icon-sm')}${notifs.length? `<span class="badge-dot">${notifs.length>9?'9+':notifs.length}</span>`:''}</button>
       </div>
       ${ui.notifOpen? renderNotifPanel(notifs) : ''}
-      <div class="content">
+      <main class="content">
         ${renderView()}
-      </div>
+      </main>
     </div>
   </div>
   ${ui.modal? renderModal() : ''}
@@ -1122,14 +1143,14 @@ function quickWeekFormHtml(r){
     <dt>Semana</dt><dd>${wk} / ${DB.config.totalWeeks}</dd>
   </div>
   <div class="field-row">
-    <div class="field"><label>Nota (1-10, opcional)</label><input class="input" type="number" min="1" max="10" id="f-qw-nota" value="${existing&&existing.nota!=null?existing.nota:''}" placeholder="Sin nota"></div>
+    <div class="field"><label for="f-qw-nota">Nota (1-10, opcional)</label><input class="input" type="number" min="1" max="10" id="f-qw-nota" value="${existing&&existing.nota!=null?existing.nota:''}" placeholder="Sin nota"></div>
     <div class="field" style="display:flex; align-items:flex-end; gap:8px; padding-bottom:9px;">
       <label style="display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; margin-bottom:0; cursor:pointer;">
         <input type="checkbox" id="f-qw-ausente" ${existing&&existing.ausente?'checked':''} style="width:16px; height:16px;"> Ausente esta semana
       </label>
     </div>
   </div>
-  <div class="field"><label>Actividad realizada / observaciones</label><textarea class="input" id="f-qw-texto">${existing?esc(existing.texto||''):''}</textarea></div>
+  <div class="field"><label for="f-qw-texto">Actividad realizada / observaciones</label><textarea class="input" id="f-qw-texto">${existing?esc(existing.texto||''):''}</textarea></div>
   <p class="help-text">Se guarda con la fecha de hoy (${fmtDate(todayISO())}) para la semana ${wk}.</p>
   `;
 }
@@ -1990,28 +2011,28 @@ function actividadDiaEditorHtml(data){
     <h3 style="font-size:13px;">${editing? 'Editar actividad':'Agregar actividad'}</h3>
     <input type="hidden" id="f-act-fecha" value="${data.fecha}">
     <input type="hidden" id="f-act-editing-id" value="${editing? editing.id:''}">
-    <div class="field"><label>Aplica a</label>
+    <div class="field"><label for="f-act-aplica">Aplica a</label>
       <select class="select" id="f-act-aplica" style="width:100%;" data-action="act-aplica-toggle">
         <option value="seccion" ${!esExcepcion?'selected':''}>Toda la sección (todos los que tengan rotación ahí)</option>
         <option value="alumno" ${esExcepcion?'selected':''}>Un alumno en particular (excepción puntual)</option>
       </select>
     </div>
     <div class="field" id="f-act-alumno-wrap" style="${esExcepcion?'':'display:none;'}">
-      <label>Alumno</label>
+      <label for="f-act-alumno">Alumno</label>
       <select class="select" id="f-act-alumno" style="width:100%;">
         ${DB.students.slice().sort((a,b)=>(a.apellido+a.nombre).localeCompare(b.apellido+b.nombre)).map(s=>`<option value="${s.id}" ${editing&&editing.studentId===s.id?'selected':''}>${esc(s.apellido)}, ${esc(s.nombre)}</option>`).join('')}
       </select>
     </div>
-    <div class="field"><label>Sección${esExcepcion?' a la que fue esta vez':''}</label>
+    <div class="field"><label for="f-act-seccion">Sección${esExcepcion?' a la que fue esta vez':''}</label>
       <select class="select" id="f-act-seccion" style="width:100%;">
         ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`<option value="${s.id}" ${editing&&editing.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
       </select>
     </div>
     <div class="field-row">
-      <div class="field"><label>Hora de inicio (opcional)</label><input class="input" type="time" id="f-act-hora-inicio" value="${editing&&editing.horaInicio?editing.horaInicio:''}"></div>
-      <div class="field"><label>Hora de finalización (opcional)</label><input class="input" type="time" id="f-act-hora-fin" value="${editing&&editing.horaFin?editing.horaFin:''}"></div>
+      <div class="field"><label for="f-act-hora-inicio">Hora de inicio (opcional)</label><input class="input" type="time" id="f-act-hora-inicio" value="${editing&&editing.horaInicio?editing.horaInicio:''}"></div>
+      <div class="field"><label for="f-act-hora-fin">Hora de finalización (opcional)</label><input class="input" type="time" id="f-act-hora-fin" value="${editing&&editing.horaFin?editing.horaFin:''}"></div>
     </div>
-    <div class="field"><label>Observaciones (opcional)</label><textarea class="input" id="f-act-observaciones">${editing?esc(editing.observaciones||''):''}</textarea></div>
+    <div class="field"><label for="f-act-observaciones">Observaciones (opcional)</label><textarea class="input" id="f-act-observaciones">${editing?esc(editing.observaciones||''):''}</textarea></div>
     <div style="display:flex; gap:8px;">
       <button class="btn btn-primary btn-sm" data-action="save-actividad">${editing? icon('check','icon-sm')+' Guardar cambios' : icon('plus','icon-sm')+' Agregar actividad'}</button>
       ${editing? `<button class="btn btn-sm" data-action="cancel-edit-actividad">Cancelar</button>`:''}
@@ -2067,18 +2088,18 @@ function cronogramaEditFormHtml(rot){
       <div style="margin-top:10px;">
         <input type="hidden" id="f-exc-editing-id" value="${editingExc?editingExc.id:''}">
         <div class="field-row">
-          <div class="field"><label>Día de esta rotación</label><input class="input" type="date" id="f-exc-fecha" min="${rot._weekStart}" max="${rot._weekEnd}" value="${editingExc?editingExc.fecha:rot._weekStart}"></div>
-          <div class="field"><label>Sección a la que fue</label>
+          <div class="field"><label for="f-exc-fecha">Día de esta rotación</label><input class="input" type="date" id="f-exc-fecha" min="${rot._weekStart}" max="${rot._weekEnd}" value="${editingExc?editingExc.fecha:rot._weekStart}"></div>
+          <div class="field"><label for="f-exc-seccion">Sección a la que fue</label>
             <select class="select" id="f-exc-seccion" style="width:100%;">
               ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`<option value="${s.id}" ${editingExc&&editingExc.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
             </select>
           </div>
         </div>
         <div class="field-row">
-          <div class="field"><label>Hora inicio (opcional)</label><input class="input" type="time" id="f-exc-hora-inicio" value="${editingExc&&editingExc.horaInicio?editingExc.horaInicio:''}"></div>
-          <div class="field"><label>Hora fin (opcional)</label><input class="input" type="time" id="f-exc-hora-fin" value="${editingExc&&editingExc.horaFin?editingExc.horaFin:''}"></div>
+          <div class="field"><label for="f-exc-hora-inicio">Hora inicio (opcional)</label><input class="input" type="time" id="f-exc-hora-inicio" value="${editingExc&&editingExc.horaInicio?editingExc.horaInicio:''}"></div>
+          <div class="field"><label for="f-exc-hora-fin">Hora fin (opcional)</label><input class="input" type="time" id="f-exc-hora-fin" value="${editingExc&&editingExc.horaFin?editingExc.horaFin:''}"></div>
         </div>
-        <div class="field"><label>Observaciones (opcional)</label><textarea class="input" id="f-exc-observaciones" style="min-height:60px;">${editingExc?esc(editingExc.observaciones||''):''}</textarea></div>
+        <div class="field"><label for="f-exc-observaciones">Observaciones (opcional)</label><textarea class="input" id="f-exc-observaciones" style="min-height:60px;">${editingExc?esc(editingExc.observaciones||''):''}</textarea></div>
         <div style="display:flex; gap:8px;">
           <button class="btn btn-primary btn-sm" type="button" data-action="save-excepcion-semana" data-rotation-id="${rot.id}">${editingExc? icon('check','icon-sm')+' Guardar Rotación '+(excepciones.findIndex(e=>e.id===editingExc.id)+2) : icon('plus','icon-sm')+' Agregar Rotación '+(excepciones.length+2)}</button>
           ${editingExc? `<button class="btn btn-sm" type="button" data-action="cancel-edit-excepcion-semana" data-rotation-id="${rot.id}">Cancelar</button>`:''}
@@ -2091,12 +2112,12 @@ function cronogramaEditFormHtml(rot){
   ${excepcionesPanel}
   <div class="kv" style="margin-bottom:14px;"><dt>Alumno</dt><dd>${esc(student?student.nombre+' '+student.apellido:'—')}</dd></div>
   <div class="field-row">
-    <div class="field"><label>Sección</label>
+    <div class="field"><label for="f-cron-seccion">Sección</label>
       <select class="select" id="f-cron-seccion" style="width:100%;">
         ${DB.sections.map(s=>`<option value="${s.id}" ${rot.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
       </select>
     </div>
-    <div class="field"><label>Tutor / Profesor</label>
+    <div class="field"><label for="f-cron-tutor">Tutor / Profesor</label>
       <select class="select" id="f-cron-tutor" style="width:100%;">
         <option value="">Sin asignar</option>
         ${DB.teachers.filter(t=>t.rol==='seccion').map(t=>`<option value="${t.id}" ${rot.teacherId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}
@@ -2104,12 +2125,12 @@ function cronogramaEditFormHtml(rot){
     </div>
   </div>
   <div class="field-row">
-    <div class="field"><label>Fecha de inicio</label><input class="input" type="date" id="f-cron-inicio" value="${rot.startDate}"></div>
-    <div class="field"><label>Fecha de fin</label><input class="input" type="date" id="f-cron-fin" value="${rot.endDate}"></div>
+    <div class="field"><label for="f-cron-inicio">Fecha de inicio</label><input class="input" type="date" id="f-cron-inicio" value="${rot.startDate}"></div>
+    <div class="field"><label for="f-cron-fin">Fecha de fin</label><input class="input" type="date" id="f-cron-fin" value="${rot.endDate}"></div>
   </div>
-  <div class="field"><label>Empresa</label><input class="input" id="f-cron-empresa" value="${esc(rot.empresa||'')}" placeholder="Nombre de la empresa (opcional)"></div>
-  <div class="field"><label>Observaciones</label><textarea class="input" id="f-cron-observaciones" placeholder="Notas sobre esta rotación">${esc(rot.observaciones||'')}</textarea></div>
-  <div class="field"><label>Grupo del alumno</label>
+  <div class="field"><label for="f-cron-empresa">Empresa</label><input class="input" id="f-cron-empresa" value="${esc(rot.empresa||'')}" placeholder="Nombre de la empresa (opcional)"></div>
+  <div class="field"><label for="f-cron-observaciones">Observaciones</label><textarea class="input" id="f-cron-observaciones" placeholder="Notas sobre esta rotación">${esc(rot.observaciones||'')}</textarea></div>
+  <div class="field"><label for="f-cron-grupo">Grupo del alumno</label>
     <select class="select" id="f-cron-grupo" style="width:100%;">
       <option value="">Sin grupo</option>
       ${(DB.groups||[]).map(g=>`<option value="${g.id}" ${DB.students.find(s=>s.id===rot.studentId).groupId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}
@@ -2125,12 +2146,12 @@ function cronogramaAddFormHtml(data){
   return `
   <div class="kv" style="margin-bottom:14px;"><dt>Alumno</dt><dd>${esc(student?student.nombre+' '+student.apellido:'—')}</dd></div>
   <div class="field-row">
-    <div class="field"><label>Sección</label>
+    <div class="field"><label for="f-cronadd-seccion">Sección</label>
       <select class="select" id="f-cronadd-seccion" style="width:100%;">
         ${DB.sections.map(s=>`<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}
       </select>
     </div>
-    <div class="field"><label>Tutor / Profesor</label>
+    <div class="field"><label for="f-cronadd-tutor">Tutor / Profesor</label>
       <select class="select" id="f-cronadd-tutor" style="width:100%;">
         <option value="">Usar el de la sección</option>
         ${DB.teachers.filter(t=>t.rol==='seccion').map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}
@@ -2138,11 +2159,11 @@ function cronogramaAddFormHtml(data){
     </div>
   </div>
   <div class="field-row">
-    <div class="field"><label>Fecha de inicio</label><input class="input" type="date" id="f-cronadd-inicio" value="${data.weekStart}"></div>
-    <div class="field"><label>Fecha de fin</label><input class="input" type="date" id="f-cronadd-fin" value="${data.weekEnd}"></div>
+    <div class="field"><label for="f-cronadd-inicio">Fecha de inicio</label><input class="input" type="date" id="f-cronadd-inicio" value="${data.weekStart}"></div>
+    <div class="field"><label for="f-cronadd-fin">Fecha de fin</label><input class="input" type="date" id="f-cronadd-fin" value="${data.weekEnd}"></div>
   </div>
-  <div class="field"><label>Empresa</label><input class="input" id="f-cronadd-empresa" placeholder="Nombre de la empresa (opcional)"></div>
-  <div class="field"><label>Observaciones</label><textarea class="input" id="f-cronadd-observaciones" placeholder="Notas sobre esta rotación"></textarea></div>
+  <div class="field"><label for="f-cronadd-empresa">Empresa</label><input class="input" id="f-cronadd-empresa" placeholder="Nombre de la empresa (opcional)"></div>
+  <div class="field"><label for="f-cronadd-observaciones">Observaciones</label><textarea class="input" id="f-cronadd-observaciones" placeholder="Notas sobre esta rotación"></textarea></div>
   <p class="help-text">Se creó con las fechas de esta semana como referencia; podés ajustarlas para que abarque el período real que necesites.</p>
   `;
 }
@@ -2188,22 +2209,22 @@ function planillaFormHtml(){
   const isAdmin = session.role==='admin';
   return `
   <div class="field-row">
-    <div class="field"><label>Alumno</label>
+    <div class="field"><label for="f-pln-alumno">Alumno</label>
       <select class="select" id="f-pln-alumno" style="width:100%;">
         ${DB.students.map(s=>`<option value="${s.id}">${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}
       </select>
     </div>
-    <div class="field"><label>Sección</label>
+    <div class="field"><label for="f-pln-seccion">Sección</label>
       <select class="select" id="f-pln-seccion" style="width:100%;">
         ${(isAdmin? DB.sections : DB.sections.filter(s=>s.teacherId===session.teacherId)).map(s=>`<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}
       </select>
     </div>
   </div>
   <div class="field-row">
-    <div class="field"><label>Grupo</label><input class="input" id="f-pln-grupo" placeholder="ej. Grupo A"></div>
-    <div class="field"><label>Año</label><input class="input" type="number" id="f-pln-anio" value="${new Date().getFullYear()}"></div>
+    <div class="field"><label for="f-pln-grupo">Grupo</label><input class="input" id="f-pln-grupo" placeholder="ej. Grupo A"></div>
+    <div class="field"><label for="f-pln-anio">Año</label><input class="input" type="number" id="f-pln-anio" value="${new Date().getFullYear()}"></div>
   </div>
-  <div class="field"><label>Fecha</label><input class="input" type="date" id="f-pln-fecha" value="${todayISO()}"></div>
+  <div class="field"><label for="f-pln-fecha">Fecha</label><input class="input" type="date" id="f-pln-fecha" value="${todayISO()}"></div>
   `;
 }
 
@@ -2288,8 +2309,8 @@ function renderPlanillaForm(p){
     <h3>Asistencia</h3>
     ${(p.asistencia||[]).length? `<ul class="mono-list">${p.asistencia.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).map((a,i)=>`<li><span>${fmtDate(a.fecha)} — ${asistenciaBadge(a.estado)}</span><span class="tag-remove" data-action="del-asistencia" data-fecha="${a.fecha}">${icon('x','icon-sm')}</span></li>`).join('')}</ul>`:`<p class="cell-muted" style="font-size:12.5px; margin-bottom:10px;">Sin días cargados todavía.</p>`}
     <div class="field-row" style="align-items:flex-end; margin-top:12px;">
-      <div class="field"><label>Fecha</label><input class="input" type="date" id="f-asis-fecha" value="${todayISO()}"></div>
-      <div class="field"><label>Estado</label>
+      <div class="field"><label for="f-asis-fecha">Fecha</label><input class="input" type="date" id="f-asis-fecha" value="${todayISO()}"></div>
+      <div class="field"><label for="f-asis-estado">Estado</label>
         <select class="select" id="f-asis-estado" style="width:100%;">
           ${ASISTENCIA_ESTADOS.map(a=>`<option value="${a.v}">${a.l}</option>`).join('')}
         </select>
@@ -2363,9 +2384,9 @@ function renderGestionUsuarios(){
 function usuarioFormHtml(u){
   u = u||{};
   return `
-  <div class="field"><label>Nombre completo</label><input class="input" id="f-usu-nombre" value="${esc(u.nombre||'')}"></div>
-  <div class="field"><label>Usuario</label><input class="input" id="f-usu-username" value="${esc(u.username||'')}" placeholder="ej. lectura.direccion"></div>
-  <div class="field"><label>Contraseña ${u.id?'(dejar en blanco para no cambiarla)':''}</label><input class="input" type="password" id="f-usu-password" placeholder="${u.id?'••••••••':'Contraseña de acceso'}"></div>
+  <div class="field"><label for="f-usu-nombre">Nombre completo</label><input class="input" id="f-usu-nombre" value="${esc(u.nombre||'')}"></div>
+  <div class="field"><label for="f-usu-username">Usuario</label><input class="input" id="f-usu-username" value="${esc(u.username||'')}" placeholder="ej. lectura.direccion"></div>
+  <div class="field"><label for="f-usu-password">Contraseña ${u.id?'(dejar en blanco para no cambiarla)':''}</label><input class="input" type="password" id="f-usu-password" placeholder="${u.id?'••••••••':'Contraseña de acceso'}"></div>
   `;
 }
 
@@ -2423,7 +2444,7 @@ function renderDocumentos(){
     ${header}
     ${tabsHtml}
     <div class="filters-row">
-      <input class="input" style="min-width:220px;" id="doc-search" placeholder="Buscar por alumno o archivo…" value="${esc(ui.docSearch)}">
+      <input class="input" style="min-width:220px;" id="doc-search" aria-label="Buscar por alumno o archivo" placeholder="Buscar por alumno o archivo…" value="${esc(ui.docSearch)}">
       <select class="select" data-action="filter-doc-curso"><option value="">Todos los cursos</option>${cursos.map(c=>`<option value="${esc(c)}" ${f.curso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
       <select class="select" data-action="filter-doc-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${f.grupo===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
       <select class="select" data-action="filter-doc-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.seccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
@@ -2482,7 +2503,7 @@ function renderDocumentos(){
   ${header}
   ${tabsHtml}
   <div class="filters-row">
-    <input class="input" style="min-width:260px;" id="doc-search" placeholder="Buscar por archivo, quien lo subió, alumno u observaciones…" value="${esc(ui.docSearch)}">
+    <input class="input" style="min-width:260px;" id="doc-search" aria-label="Buscar por archivo, quien lo subió, alumno u observaciones" placeholder="Buscar por archivo, quien lo subió, alumno u observaciones…" value="${esc(ui.docSearch)}">
   </div>
   <div class="table-wrap">
   <table>
@@ -2520,20 +2541,20 @@ function documentoFormHtml(){
     </div>
   </div>
   ${session.role==='admin'? `
-  <div class="field"><label>Categoría</label>
+  <div class="field"><label for="f-doc-tipo">Categoría</label>
     <select class="select" id="f-doc-tipo" style="width:100%;">
       <option value="mep">Documentos MEP (profesores)</option>
       <option value="alumno">Documentos de Alumnos</option>
     </select>
   </div>`:''}
   ${session.role!=='alumno'? `
-  <div class="field"><label>Alumno relacionado (opcional)</label>
+  <div class="field"><label for="f-doc-alumno">Alumno relacionado (opcional)</label>
     <select class="select" id="f-doc-alumno" style="width:100%;">
       <option value="">Sin alumno relacionado</option>
       ${(DB&&DB.students? DB.students : []).map(s=>`<option value="${s.id}">${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}
     </select>
   </div>`:''}
-  <div class="field"><label>Observaciones</label><textarea class="input" id="f-doc-observaciones" placeholder="Notas opcionales sobre este documento"></textarea></div>
+  <div class="field"><label for="f-doc-observaciones">Observaciones</label><textarea class="input" id="f-doc-observaciones" placeholder="Notas opcionales sobre este documento"></textarea></div>
   `;
 }
 
@@ -2556,7 +2577,7 @@ function renderConfig(){
   <div class="section-card">
     <h3>Aprobación</h3>
     <div class="field-row">
-      <div class="field"><label>Nota mínima de aprobación</label><input class="input" type="number" min="1" max="10" id="cfg-nota-aprobacion" value="${c.notaAprobacion||6}" ${isViewAdmin?'disabled':''}></div>
+      <div class="field"><label for="cfg-nota-aprobacion">Nota mínima de aprobación</label><input class="input" type="number" min="1" max="10" id="cfg-nota-aprobacion" value="${c.notaAprobacion||6}" ${isViewAdmin?'disabled':''}></div>
     </div>
     ${!isViewAdmin? `<button class="btn btn-primary btn-sm" data-action="save-nota-aprobacion">Guardar</button>`:''}
     <p class="help-text">Se usa para calcular el estado Aprobado/Desaprobado en el Promedio Final de cada alumno.</p>
@@ -2615,17 +2636,17 @@ function renderModal(){
   let body='', title='', wide=false;
   if(m.type==='student-form'){ title = m.data? 'Editar alumno':'Nuevo alumno'; body = studentFormHtml(m.data); }
   else if(m.type==='section-form'){ title = m.data? 'Editar sección':'Nueva sección'; body = sectionFormHtml(m.data); }
-  else if(m.type==='group-form'){ title = m.data? 'Editar grupo':'Nuevo grupo'; body = `<div class="field"><label>Nombre del grupo</label><input class="input" id="f-grupo-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Grupo A"></div>`; }
+  else if(m.type==='group-form'){ title = m.data? 'Editar grupo':'Nuevo grupo'; body = `<div class="field"><label for="f-grupo-nombre">Nombre del grupo</label><input class="input" id="f-grupo-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Grupo A"></div>`; }
   else if(m.type==='teacher-form'){ title = m.data? 'Editar profesor':'Nuevo profesor'; body = teacherFormHtml(m.data); }
   else if(m.type==='rotation-form'){ title='Cargar rotación'; wide=true; body = rotationFormHtml(m.data); }
   else if(m.type==='guidelines-form'){ title='Editar lineamientos'; body = guidelinesFormHtml(); }
-  else if(m.type==='consigna-form'){ title='Nueva consigna'; body = `<div class="field"><label>Texto</label><textarea class="input" id="f-consigna"></textarea></div>`; }
-  else if(m.type==='objetivo-form'){ title='Nuevo objetivo semanal'; body = `<div class="field-row"><div class="field"><label>Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-obj-semana"></div></div><div class="field"><label>Objetivo</label><textarea class="input" id="f-obj-texto"></textarea></div>`; }
+  else if(m.type==='consigna-form'){ title='Nueva consigna'; body = `<div class="field"><label for="f-consigna">Texto</label><textarea class="input" id="f-consigna"></textarea></div>`; }
+  else if(m.type==='objetivo-form'){ title='Nuevo objetivo semanal'; body = `<div class="field-row"><div class="field"><label for="f-obj-semana">Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-obj-semana"></div></div><div class="field"><label for="f-obj-texto">Objetivo</label><textarea class="input" id="f-obj-texto"></textarea></div>`; }
   else if(m.type==='pendiente-form'){ title='Nuevo contenido pendiente'; body = pendienteFormHtml(); }
   else if(m.type==='quick-week-form'){ title='Cargar semana'; body = quickWeekFormHtml(m.data); }
   else if(m.type==='documento-form'){ title='Subir documento'; body = documentoFormHtml(); }
   else if(m.type==='planilla-form'){ title='Nueva Planilla Digital FAT'; body = planillaFormHtml(); }
-  else if(m.type==='criterio-form'){ title = m.data? 'Editar criterio':'Nuevo criterio'; body = `<div class="field"><label>Nombre del criterio</label><input class="input" id="f-criterio-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Puntualidad"></div>`; }
+  else if(m.type==='criterio-form'){ title = m.data? 'Editar criterio':'Nuevo criterio'; body = `<div class="field"><label for="f-criterio-nombre">Nombre del criterio</label><input class="input" id="f-criterio-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Puntualidad"></div>`; }
   else if(m.type==='cronograma-edit-form'){ title='Editar rotación en el cronograma'; body = cronogramaEditFormHtml(m.data); }
   else if(m.type==='cronograma-add-form'){ title='Nueva rotación'; body = cronogramaAddFormHtml(m.data); }
   else if(m.type==='usuario-form'){ title = m.data? 'Editar VIEW ADMIN':'Nuevo VIEW ADMIN'; body = usuarioFormHtml(m.data); }
@@ -2651,26 +2672,26 @@ function studentFormHtml(s){
   s = s||{};
   return `
   <div class="field-row">
-    <div class="field"><label>Nombre</label><input class="input" id="f-nombre" value="${esc(s.nombre||'')}"></div>
-    <div class="field"><label>Apellido</label><input class="input" id="f-apellido" value="${esc(s.apellido||'')}"></div>
+    <div class="field"><label for="f-nombre">Nombre</label><input class="input" id="f-nombre" value="${esc(s.nombre||'')}"></div>
+    <div class="field"><label for="f-apellido">Apellido</label><input class="input" id="f-apellido" value="${esc(s.apellido||'')}"></div>
   </div>
   <div class="field-row">
-    <div class="field"><label>DNI</label><input class="input" id="f-dni" value="${esc(s.dni||'')}"></div>
-    <div class="field"><label>Legajo</label><input class="input" id="f-legajo" value="${esc(s.legajo||'')}"></div>
+    <div class="field"><label for="f-dni">DNI</label><input class="input" id="f-dni" value="${esc(s.dni||'')}"></div>
+    <div class="field"><label for="f-legajo">Legajo</label><input class="input" id="f-legajo" value="${esc(s.legajo||'')}"></div>
   </div>
   <div class="field-row">
-    <div class="field"><label>Curso</label><input class="input" id="f-curso" value="${esc(s.curso||'')}" placeholder="ej. 6°"></div>
-    <div class="field"><label>División</label><input class="input" id="f-division" value="${esc(s.division||'')}" placeholder="ej. A"></div>
+    <div class="field"><label for="f-curso">Curso</label><input class="input" id="f-curso" value="${esc(s.curso||'')}" placeholder="ej. 6°"></div>
+    <div class="field"><label for="f-division">División</label><input class="input" id="f-division" value="${esc(s.division||'')}" placeholder="ej. A"></div>
   </div>
   <div class="field-row">
-    <div class="field"><label>Fecha de inicio</label><input class="input" type="date" id="f-fecha" value="${s.fechaInicio||todayISO()}"></div>
-    <div class="field"><label>Estado</label>
+    <div class="field"><label for="f-fecha">Fecha de inicio</label><input class="input" type="date" id="f-fecha" value="${s.fechaInicio||todayISO()}"></div>
+    <div class="field"><label for="f-estado">Estado</label>
       <select class="select" id="f-estado" style="width:100%;">
         ${['activo','pausado','finalizado','abandonado'].map(e=>`<option value="${e}" ${s.estado===e?'selected':''}>${e[0].toUpperCase()+e.slice(1)}</option>`).join('')}
       </select>
     </div>
   </div>
-  <div class="field"><label>Grupo (opcional)</label>
+  <div class="field"><label for="f-grupo">Grupo (opcional)</label>
     <select class="select" id="f-grupo" style="width:100%;">
       <option value="">Sin grupo</option>
       ${(DB.groups||[]).map(g=>`<option value="${g.id}" ${s.groupId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}
@@ -2679,8 +2700,8 @@ function studentFormHtml(s){
   ${(()=>{
     const linkedUser = s.id ? DB.users.find(u=>u.studentId===s.id) : null;
     return `<div class="field-row">
-      <div class="field"><label>Usuario del Portal de Alumnos (opcional)</label><input class="input" id="f-al-username" value="${linkedUser?esc(linkedUser.username):''}" placeholder="ej. juli.rearte"></div>
-      <div class="field"><label>Contraseña ${linkedUser?'(dejar en blanco para no cambiarla)':'(para dar acceso)'}</label><input class="input" type="password" id="f-al-password" placeholder="${linkedUser?'••••••••':'Contraseña de acceso'}"></div>
+      <div class="field"><label for="f-al-username">Usuario del Portal de Alumnos (opcional)</label><input class="input" id="f-al-username" value="${linkedUser?esc(linkedUser.username):''}" placeholder="ej. juli.rearte"></div>
+      <div class="field"><label for="f-al-password">Contraseña ${linkedUser?'(dejar en blanco para no cambiarla)':'(para dar acceso)'}</label><input class="input" type="password" id="f-al-password" placeholder="${linkedUser?'••••••••':'Contraseña de acceso'}"></div>
     </div>
     <p class="help-text">Completá usuario y contraseña si querés que este alumno pueda entrar a su propio Portal de Alumnos.</p>`;
   })()}
@@ -2691,18 +2712,18 @@ function studentFormHtml(s){
 function sectionFormHtml(sec){
   sec = sec||{};
   return `
-  <div class="field"><label>Nombre de la sección</label><input class="input" id="f-sec-nombre" value="${esc(sec.nombre||'')}"></div>
+  <div class="field"><label for="f-sec-nombre">Nombre de la sección</label><input class="input" id="f-sec-nombre" value="${esc(sec.nombre||'')}"></div>
   <div class="field-row">
-    <div class="field"><label>Profesor a cargo</label>
+    <div class="field"><label for="f-sec-teacher">Profesor a cargo</label>
       <select class="select" id="f-sec-teacher" style="width:100%;">
         <option value="">Sin asignar</option>
         ${DB.teachers.filter(t=>t.rol==='seccion').map(t=>`<option value="${t.id}" ${sec.teacherId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}
       </select>
     </div>
-    <div class="field"><label>Duración (semanas)</label><input class="input" type="number" min="1" id="f-sec-weeks" value="${sec.weeks||5}"></div>
+    <div class="field"><label for="f-sec-weeks">Duración (semanas)</label><input class="input" type="number" min="1" id="f-sec-weeks" value="${sec.weeks||5}"></div>
   </div>
   <div class="field">
-    <label>Color de la sección</label>
+    <label for="f-sec-color">Color de la sección</label>
     <div style="display:flex; align-items:center; gap:10px;">
       <input type="color" id="f-sec-color" value="${esc(sec.color||sectionColor(sec.id||''))}" style="width:44px; height:36px; padding:2px; border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; background:var(--surface);">
       <span class="cell-muted" style="font-size:12.5px;">Se refleja automáticamente en Cronograma, Rotaciones, Dashboard, Planillas e Informes.</span>
@@ -2716,22 +2737,22 @@ function teacherFormHtml(t){
   t = t||{};
   const u = t.id ? DB.users.find(x=>x.teacherId===t.id) : null;
   return `
-  <div class="field"><label>Nombre completo</label><input class="input" id="f-t-nombre" value="${esc(t.nombre||'')}"></div>
-  <div class="field"><label>Rol</label>
+  <div class="field"><label for="f-t-nombre">Nombre completo</label><input class="input" id="f-t-nombre" value="${esc(t.nombre||'')}"></div>
+  <div class="field"><label for="f-t-rol">Rol</label>
     <select class="select" id="f-t-rol" style="width:100%;">
       <option value="seccion" ${t.rol==='seccion'?'selected':''}>Profesor de sección</option>
       <option value="coordinador" ${t.rol==='coordinador'?'selected':''}>Coordinador FAT</option>
     </select>
   </div>
-  <div class="field"><label>Sección (si aplica)</label>
+  <div class="field"><label for="f-t-seccion">Sección (si aplica)</label>
     <select class="select" id="f-t-seccion" style="width:100%;">
       <option value="">—</option>
       ${DB.sections.map(s=>`<option value="${s.id}" ${(u&&u.sectionId===s.id)?'selected':''}>${esc(s.nombre)}</option>`).join('')}
     </select>
   </div>
   <div class="field-row">
-    <div class="field"><label>Usuario</label><input class="input" id="f-t-username" value="${esc(u?u.username:'')}" placeholder="ej. prof.nombre"></div>
-    <div class="field"><label>Contraseña ${t.id?'(dejar en blanco para no cambiarla)':''}</label><input class="input" type="password" id="f-t-password" value="" placeholder="${t.id?'••••••••':'Contraseña de acceso'}"></div>
+    <div class="field"><label for="f-t-username">Usuario</label><input class="input" id="f-t-username" value="${esc(u?u.username:'')}" placeholder="ej. prof.nombre"></div>
+    <div class="field"><label for="f-t-password">Contraseña ${t.id?'(dejar en blanco para no cambiarla)':''}</label><input class="input" type="password" id="f-t-password" value="" placeholder="${t.id?'••••••••':'Contraseña de acceso'}"></div>
   </div>`;
 }
 
@@ -2749,35 +2770,35 @@ function rotationFormHtml(r){
     <div class="tab" data-tab="final">${icon('award','icon-sm')} Informe final</div>
   </div>
   <div data-tabpanel="general">
-    <div class="field"><label>Plan de enseñanza</label><textarea class="input" id="f-r-plan">${esc(r.plan||'')}</textarea></div>
-    <div class="field"><label>Actividades realizadas</label><textarea class="input" id="f-r-actividades">${esc(r.actividades||'')}</textarea></div>
-    <div class="field"><label>Observaciones</label><textarea class="input" id="f-r-observaciones">${esc(r.observaciones||'')}</textarea></div>
+    <div class="field"><label for="f-r-plan">Plan de enseñanza</label><textarea class="input" id="f-r-plan">${esc(r.plan||'')}</textarea></div>
+    <div class="field"><label for="f-r-actividades">Actividades realizadas</label><textarea class="input" id="f-r-actividades">${esc(r.actividades||'')}</textarea></div>
+    <div class="field"><label for="f-r-observaciones">Observaciones</label><textarea class="input" id="f-r-observaciones">${esc(r.observaciones||'')}</textarea></div>
   </div>
   <div data-tabpanel="semanal" style="display:none;">
     <div class="field-row">
-      <div class="field"><label>Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-r-sem-num" value="${wk}"></div>
-      <div class="field"><label>Fecha</label><input class="input" type="date" id="f-r-sem-fecha" value="${todayISO()}"></div>
+      <div class="field"><label for="f-r-sem-num">Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-r-sem-num" value="${wk}"></div>
+      <div class="field"><label for="f-r-sem-fecha">Fecha</label><input class="input" type="date" id="f-r-sem-fecha" value="${todayISO()}"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Nota de la semana (1-10, opcional)</label><input class="input" type="number" min="1" max="10" id="f-r-sem-nota" placeholder="Sin nota esta semana"></div>
+      <div class="field"><label for="f-r-sem-nota">Nota de la semana (1-10, opcional)</label><input class="input" type="number" min="1" max="10" id="f-r-sem-nota" placeholder="Sin nota esta semana"></div>
       <div class="field" style="display:flex; align-items:flex-end; gap:8px; padding-bottom:9px;">
         <label style="display:flex; align-items:center; gap:7px; font-weight:600; font-size:13px; margin-bottom:0; cursor:pointer;">
           <input type="checkbox" id="f-r-sem-ausente" style="width:16px; height:16px;"> Alumno ausente esta semana
         </label>
       </div>
     </div>
-    <div class="field"><label>Texto del informe / observaciones</label><textarea class="input" id="f-r-sem-texto"></textarea></div>
+    <div class="field"><label for="f-r-sem-texto">Texto del informe / observaciones</label><textarea class="input" id="f-r-sem-texto"></textarea></div>
     <button class="btn btn-sm" type="button" data-action="add-informe-semanal" data-id="${r.id}">${icon('plus','icon-sm')} Agregar registro semanal</button>
     ${r.informesSemanales.length? `<ul class="mono-list" style="margin-top:10px;">${r.informesSemanales.slice().sort((a,b)=>a.semana-b.semana).map(i=>`<li><span>Semana ${i.semana}${i.ausente?' · <span class="badge badge-red" style="margin-left:2px;">Ausente</span>':''}${i.nota!=null?' · <span class="badge badge-accent" style="margin-left:2px;">Nota '+i.nota+'</span>':''}${i.texto?': '+esc(i.texto):''}${i.profesorNombre?' <span class="cell-muted">('+esc(i.profesorNombre)+')</span>':''}</span><span class="cell-muted">${fmtDate(i.fecha)}</span></li>`).join('')}</ul>`:''}
   </div>
   <div data-tabpanel="final" style="display:none;">
-    <div class="field"><label>Informe final</label><textarea class="input" id="f-r-final">${esc(r.informeFinal||'')}</textarea></div>
+    <div class="field"><label for="f-r-final">Informe final</label><textarea class="input" id="f-r-final">${esc(r.informeFinal||'')}</textarea></div>
     <div class="field-row">
       <div class="field">
         <label>Promedio de esta sección</label>
         <div class="input" style="background:var(--surface-2); display:flex; align-items:center; font-weight:700;">${rotationAvg(r)!=null? rotationAvg(r).toFixed(1) : '— (sin notas semanales cargadas)'}</div>
       </div>
-      <div class="field"><label>Estado de la rotación</label>
+      <div class="field"><label for="f-r-status">Estado de la rotación</label>
         <select class="select" id="f-r-status" style="width:100%;">
           <option value="pendiente" ${r.status==='pendiente'?'selected':''}>Pendiente</option>
           <option value="en_curso" ${r.status==='en_curso'?'selected':''}>En curso</option>
@@ -2786,7 +2807,7 @@ function rotationFormHtml(r){
       </div>
     </div>
     <p class="help-text">El promedio se calcula solo con las notas semanales cargadas en la pestaña "Informe semanal". Si finalizás la rotación sin ninguna nota, se genera automáticamente un registro en Contenidos Pendientes.</p>
-    <div class="field"><label>Comentarios</label><textarea class="input" id="f-r-comentarios">${esc(r.comentarios||'')}</textarea></div>
+    <div class="field"><label for="f-r-comentarios">Comentarios</label><textarea class="input" id="f-r-comentarios">${esc(r.comentarios||'')}</textarea></div>
     <div class="field">
       <label>Documento adjunto (opcional)</label>
       <label class="file-drop" for="f-r-file" id="f-r-file-label">
@@ -2804,7 +2825,7 @@ function rotationFormHtml(r){
 }
 
 function guidelinesFormHtml(){
-  return `<div class="field"><label>Lineamientos generales</label><textarea class="input" id="f-lineamientos" style="min-height:140px;">${esc(DB.config.lineamientos)}</textarea></div>`;
+  return `<div class="field"><label for="f-lineamientos">Lineamientos generales</label><textarea class="input" id="f-lineamientos" style="min-height:140px;">${esc(DB.config.lineamientos)}</textarea></div>`;
 }
 
 /* ---------------------------- COMUNICADOS (lineamientos individuales) ---------------------------- */
@@ -2824,20 +2845,20 @@ function comunicadoProfesoresDestino(c){
 function comunicadoFormHtml(){
   const profesores = DB.teachers.filter(t=>t.rol==='seccion');
   return `
-  <div class="field"><label>Título</label><input class="input" id="f-com-titulo" placeholder="ej. Nuevo protocolo de asistencia"></div>
-  <div class="field"><label>Descripción</label><textarea class="input" id="f-com-descripcion" style="min-height:100px;"></textarea></div>
+  <div class="field"><label for="f-com-titulo">Título</label><input class="input" id="f-com-titulo" placeholder="ej. Nuevo protocolo de asistencia"></div>
+  <div class="field"><label for="f-com-descripcion">Descripción</label><textarea class="input" id="f-com-descripcion" style="min-height:100px;"></textarea></div>
   <div class="field-row">
-    <div class="field"><label>Prioridad</label>
+    <div class="field"><label for="f-com-prioridad">Prioridad</label>
       <select class="select" id="f-com-prioridad" style="width:100%;">
         <option value="informativo">Informativo</option>
         <option value="importante">Importante</option>
         <option value="urgente">Urgente</option>
       </select>
     </div>
-    <div class="field"><label>Fecha de vencimiento (opcional)</label><input class="input" type="date" id="f-com-vencimiento"></div>
+    <div class="field"><label for="f-com-vencimiento">Fecha de vencimiento (opcional)</label><input class="input" type="date" id="f-com-vencimiento"></div>
   </div>
   <div class="field">
-    <label>Destinatarios</label>
+    <label for="f-com-destino">Destinatarios</label>
     <select class="select" id="f-com-destino" style="width:100%;" data-action="com-destino-tipo">
       <option value="todos">Todos los profesores</option>
       <option value="elegir">Elegir profesores (uno o varios)</option>
@@ -2897,21 +2918,21 @@ function pendienteFormHtml(){
   const availableSections = isProf? DB.sections.filter(s=>s.id===session.sectionId) : DB.sections;
   const studentsInSection = (secId)=> DB.students.filter(s=> rotationsOf(s.id).some(r=>r.sectionId===secId));
   return `
-  <div class="field"><label>Sección</label>
+  <div class="field"><label for="f-pend-seccion">Sección</label>
     <select class="select" id="f-pend-seccion" style="width:100%;" ${isProf?'disabled':''}>
       ${availableSections.map(s=>`<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}
     </select>
   </div>
-  <div class="field"><label>Alumno</label>
+  <div class="field"><label for="f-pend-alumno">Alumno</label>
     <select class="select" id="f-pend-alumno" style="width:100%;">
       ${(isProf? studentsInSection(session.sectionId) : DB.students).map(s=>`<option value="${s.id}">${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}
     </select>
   </div>
   <div class="field-row">
-    <div class="field"><label>Semana (opcional)</label><input class="input" type="number" min="1" id="f-pend-semana"></div>
-    <div class="field"><label>Motivo</label><input class="input" id="f-pend-motivo" placeholder="ej. Ausencia prolongada"></div>
+    <div class="field"><label for="f-pend-semana">Semana (opcional)</label><input class="input" type="number" min="1" id="f-pend-semana"></div>
+    <div class="field"><label for="f-pend-motivo">Motivo</label><input class="input" id="f-pend-motivo" placeholder="ej. Ausencia prolongada"></div>
   </div>
-  <div class="field"><label>Contenido pendiente</label><textarea class="input" id="f-pend-contenido" placeholder="Qué le queda por recuperar al alumno"></textarea></div>
+  <div class="field"><label for="f-pend-contenido">Contenido pendiente</label><textarea class="input" id="f-pend-contenido" placeholder="Qué le queda por recuperar al alumno"></textarea></div>
   `;
 }
 
@@ -3803,9 +3824,11 @@ function val(id){ const e=document.getElementById(id); return e? e.value.trim() 
 /* =========================================================================
    EXPORTS
    ========================================================================= */
-function exportStudentPDF(studentId){
+async function exportStudentPDF(studentId){
   const s = DB.students.find(x=>x.id===studentId);
-  if(!s || !window.jspdf){ toast('No se pudo generar el PDF','red'); return; }
+  if(!s){ toast('No se pudo generar el PDF','red'); return; }
+  try{ await loadJsPDF(); }catch(e){ toast('No se pudo cargar el generador de PDF','red'); return; }
+  if(!window.jspdf){ toast('No se pudo generar el PDF','red'); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   let y = 18;
@@ -3831,7 +3854,8 @@ function exportStudentPDF(studentId){
   doc.save('FAT_'+s.apellido+'_'+s.nombre+'.pdf');
 }
 
-function exportAllPDF(){
+async function exportAllPDF(){
+  try{ await loadJsPDF(); }catch(e){ toast('No se pudo cargar el generador de PDF','red'); return; }
   if(!window.jspdf){ toast('No se pudo generar el PDF','red'); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
@@ -3847,7 +3871,8 @@ function exportAllPDF(){
   doc.save('FAT_informe_general.pdf');
 }
 
-function exportAllExcel(){
+async function exportAllExcel(){
+  try{ await loadXLSX(); }catch(e){ toast('No se pudo cargar el generador de Excel','red'); return; }
   if(!window.XLSX){ toast('No se pudo generar el Excel','red'); return; }
   const rows = DB.students.map(s=>({
     Nombre:s.nombre, Apellido:s.apellido, DNI:s.dni, Legajo:s.legajo, Curso:s.curso, División:s.division,
@@ -3861,7 +3886,8 @@ function exportAllExcel(){
   XLSX.writeFile(wb, 'FAT_alumnos.xlsx');
 }
 
-function exportGradesExcel(){
+async function exportGradesExcel(){
+  try{ await loadXLSX(); }catch(e){ toast('No se pudo cargar el generador de Excel','red'); return; }
   if(!window.XLSX){ toast('No se pudo generar el Excel','red'); return; }
   const rows = DB.rotations.map(r=>({
     Alumno: studentName(r.studentId), Sección: sectionName(r.sectionId), Profesor: teacherName(r.teacherId),
