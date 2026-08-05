@@ -2067,7 +2067,7 @@ function renderGuidelines(){
             ${o.archivo? ` · <a href="${o.archivo.url}" target="_blank" rel="noopener">${esc(o.archivo.nombre)}</a>`:''}
           </div>
         </span>
-        ${(session.role==='admin' || o.createdBy===session.userId)? `<span class="tag-remove" data-action="del-objetivo-semanal" data-id="${o.id}">${icon('x','icon-sm')}</span>`:''}
+        ${(session.role==='admin' || o.createdBy===session.sub)? `<span class="tag-remove" data-action="del-objetivo-semanal" data-id="${o.id}">${icon('x','icon-sm')}</span>`:''}
       </li>`).join('')}</ul>` : `<div class="empty-state">Sin objetivos semanales asignados</div>`}
   </div>
 
