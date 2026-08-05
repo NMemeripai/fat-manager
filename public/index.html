@@ -283,6 +283,22 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 .tl-label{font-size:11.5px; font-weight:650; margin-top:8px; text-align:center;}
 .tl-sub{font-size:10.5px; color:var(--text-3); text-align:center;}
 
+/* carrusel de rotaciones: 2 tarjetas visibles en celular, hasta 4 en pantallas más anchas, deslizable */
+.rot-carousel{display:flex; gap:11px; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; padding:2px 2px 12px; cursor:grab; scrollbar-width:thin;}
+.rot-carousel.dragging{cursor:grabbing; scroll-snap-type:none; user-select:none;}
+.rot-carousel::-webkit-scrollbar{height:6px;}
+.rot-carousel::-webkit-scrollbar-thumb{background:var(--border-strong); border-radius:8px;}
+.rot-card{flex:0 0 calc(50% - 6px); scroll-snap-align:start; border:1.5px solid var(--border); border-radius:var(--r-md); background:var(--surface); padding:12px 13px; box-shadow:var(--shadow-xs); transition:border-color .15s var(--ease);}
+@media(min-width:560px){.rot-card{flex-basis:calc(33.333% - 8px);}}
+@media(min-width:720px){.rot-card{flex-basis:calc(25% - 9px);}}
+.rot-card.current{border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);}
+.rot-card.done{opacity:.8;}
+.rot-dot{width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; margin-bottom:9px; background:var(--surface-2); color:var(--text-3); flex-shrink:0;}
+.rot-card.done .rot-dot{background:var(--green); color:#fff;}
+.rot-card.current .rot-dot{background:var(--accent); color:#fff;}
+.rot-label{font-size:12px; font-weight:700; line-height:1.3; display:flex; align-items:center; gap:5px;}
+.rot-sub{font-size:10.5px; color:var(--text-3); margin-top:5px;}
+
 /* bars & progress */
 .bar-row{display:flex; align-items:center; gap:10px; margin-bottom:11px;}
 .bar-label{width:150px; font-size:12.5px; color:var(--text-2); flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
@@ -633,19 +649,19 @@ async function openRegistroDiario(fecha){
   const data = await apiFetch('GET', '/api/mi-portal/registros?fecha='+encodeURIComponent(fecha));
   if(data.registro){
     const reg = await apiFetch('GET', '/api/mi-portal/registros/'+data.registro.id);
-    reg._secciones = data.secciones; reg._sugerido = data.sugerido;
+    reg._secciones = data.secciones; reg._sugerido = data.sugerido; reg._objetivosSemanales = data.objetivosSemanales;
     RD = reg;
     ui.spView = RD.modo==='archivo' ? 'archivo-upload' : 'registro';
   } else {
-    RD_SUGERIDO_TMP = { secciones: data.secciones, sugerido: data.sugerido, fecha };
+    RD_SUGERIDO_TMP = { secciones: data.secciones, sugerido: data.sugerido, fecha, objetivosSemanales: data.objetivosSemanales };
     ui.spView = 'elegir-modo';
   }
 }
 async function crearRegistroConModo(modo){
-  const { fecha, sugerido, secciones } = RD_SUGERIDO_TMP;
+  const { fecha, sugerido, secciones, objetivosSemanales } = RD_SUGERIDO_TMP;
   const created = await apiFetch('POST', '/api/mi-portal/registros', { fecha, sectionId: sugerido.sectionId, mep:'', modo });
   const reg = await apiFetch('GET', '/api/mi-portal/registros/'+created.id);
-  reg._secciones = secciones; reg._sugerido = sugerido;
+  reg._secciones = secciones; reg._sugerido = sugerido; reg._objetivosSemanales = objetivosSemanales;
   RD = reg;
   ui.spView = modo==='archivo' ? 'archivo-upload' : 'registro';
 }
@@ -992,7 +1008,7 @@ function renderStudentPortalPage(){
 function renderSPHome(){
   const c = SP.current;
   const wk = SP.semanaActual;
-  const objetivoSemana = (SP.objetivos||[]).find(o=>o.semana===wk);
+  const objetivosSemanales = SP.objetivosSemanales || [];
   const misRespuestas = c ? (c.respuestasAlumno||[]).find(r=>r.semana===wk) : null;
 
   return `
@@ -1023,8 +1039,14 @@ function renderSPHome(){
         </div>
         ${c.plan? `<p style="margin-bottom:6px;"><strong>Plan de la sección:</strong> ${esc(c.plan)}</p>`:''}
         ${c.actividades? `<p style="margin-bottom:6px;"><strong>Actividades de esta semana:</strong> ${esc(c.actividades)}</p>`:''}
-        ${objetivoSemana? `<p style="margin-bottom:6px;"><strong>Objetivo de la semana ${wk}:</strong> ${esc(objetivoSemana.texto)}</p>`:''}
+        ${objetivosSemanales.length? objetivosSemanales.map(o=>`<p style="margin-bottom:6px;"><strong>Objetivo:</strong> ${esc(o.texto)}${o.archivo?` · <a href="${o.archivo.url}" target="_blank" rel="noopener">${esc(o.archivo.nombre)}</a>`:''}</p>`).join('') : ''}
       </div>
+
+      ${SP.objetivoGeneral? `
+      <div class="section-card">
+        <h3>Objetivo General</h3>
+        <a href="${SP.objetivoGeneral.url}" target="_blank" rel="noopener" class="file-chip">${icon(SP.objetivoGeneral.tipo==='link'?'paperclip':'file','icon-sm')} ${esc(SP.objetivoGeneral.nombre)}</a>
+      </div>` : ''}
 
       <div class="section-card">
         <h3>Tu seguimiento de esta semana</h3>
@@ -1076,11 +1098,15 @@ function renderSPHome(){
 
       <div class="section-card">
         <h3>Tu recorrido por secciones</h3>
-        <div class="timeline">
+        <div class="rot-carousel" id="rot-carousel">
           ${SP.rotaciones.slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||'')).map((r,i)=>{
             const cls = r.status==='finalizada'?'done':(isRotationCurrentByDate(r)?'current':'');
             const dot = r.status==='finalizada'? icon('check','icon-sm') : (i+1);
-            return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${r.sectionColor?`<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${r.sectionColor}; flex-shrink:0;"></span> `:''}${esc(r.sectionNombre)}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
+            return `<div class="rot-card ${cls}">
+              <div class="rot-dot">${dot}</div>
+              <div class="rot-label">${r.sectionColor?`<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${r.sectionColor}; flex-shrink:0;"></span>`:''}${esc(r.sectionNombre)}</div>
+              <div class="rot-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div>
+            </div>`;
           }).join('')}
         </div>
       </div>
@@ -1142,6 +1168,17 @@ function renderRegistroDiarioForm(){
         <div class="field"><label for="rd-mep">MEP</label><input class="input rd-autosave" id="rd-mep" data-field="mep" value="${esc(RD.mep||'')}" placeholder="Módulo / referente MEP" ${locked?'disabled':''}></div>
       </div>
 
+      ${(RD._objetivosSemanales&&RD._objetivosSemanales.length)? `
+      <div class="card" style="border-color:var(--accent-soft); background:var(--accent-softer); margin-bottom:16px;">
+        <div style="display:flex; gap:10px; align-items:flex-start;">
+          <span style="color:var(--accent-2); flex-shrink:0;">${icon('award','icon-sm')}</span>
+          <div>
+            <div style="font-weight:700; font-size:13px; color:var(--accent-2); margin-bottom:4px;">Objetivo de esta rotación</div>
+            ${RD._objetivosSemanales.map(o=>`<p style="font-size:13px; color:var(--accent-2); margin-bottom:4px;">${esc(o.texto)}${o.archivo?` · <a href="${o.archivo.url}" target="_blank" rel="noopener">${esc(o.archivo.nombre)}</a>`:''}</p>`).join('')}
+          </div>
+        </div>
+      </div>` : ''}
+
       <div id="rd-actividades-wrap">
         ${actividades.map((a,i)=>renderActividadCard(a,i,locked)).join('')}
       </div>
@@ -1149,7 +1186,6 @@ function renderRegistroDiarioForm(){
 
       <div class="section-card">
         <h3>Datos</h3>
-        <p class="cell-muted" style="font-size:12px; margin-bottom:8px;">Cantidad de madres, lechones, producción, pesos u otros datos relevantes.</p>
         <textarea class="input rd-autosave" id="rd-datos" data-field="datos" style="min-height:100px;" placeholder="Registrá acá los datos de la jornada…" ${locked?'disabled':''}>${esc(RD.datos||'')}</textarea>
       </div>
 
@@ -2000,27 +2036,107 @@ function renderPendientes(){
 /* ---------------------------- GUIDELINES ---------------------------- */
 function renderGuidelines(){
   const canEdit = session.role==='admin' || session.role==='coordinador';
+  const canAsignarObjetivo = ['admin','seccion','coordinador'].includes(session.role);
   const c = DB.config;
   const consignas = DB.consignas || [];
-  const objetivos = DB.objetivos || [];
+  const objetivosSemanales = DB.objetivosSemanales || [];
+  const og = c.objetivoGeneral;
   return `
   <div class="page-head">
-    <div><h1 class="page-title">Lineamientos</h1><p class="page-sub">Publicados por el Coordinador FAT</p></div>
+    <div><h1 class="page-title">Lineamientos</h1><p class="page-sub">Válidos durante todo el ciclo lectivo</p></div>
     ${canEdit? `<button class="btn btn-primary" data-action="edit-guidelines">${icon('edit','icon-sm')} Editar</button>`:''}
   </div>
   <div class="section-card">
     <h3>Lineamientos generales</h3>
     <p>${esc(c.lineamientos)||'Sin publicar aún.'}</p>
   </div>
+
+  <div class="section-card">
+    <h3>Objetivo General ${session.role==='admin'? `<button class="btn btn-sm" data-action="edit-objetivo-general">${icon('edit','icon-sm')} ${og?'Editar':'Cargar'}</button>`:''}</h3>
+    ${og? (og.tipo==='link'? `<a href="${og.url}" target="_blank" rel="noopener" class="file-chip">${icon('paperclip','icon-sm')} ${esc(og.nombre)}</a>` : `<a href="${og.url}" target="_blank" rel="noopener" class="file-chip">${icon('file','icon-sm')} ${esc(og.nombre)}</a>`) : `<div class="empty-state" style="padding:20px;">Sin objetivo general publicado</div>`}
+  </div>
+
+  <div class="section-card">
+    <h3>Objetivos Semanales ${canAsignarObjetivo? `<button class="btn btn-sm" data-action="new-objetivo-semanal">${icon('plus','icon-sm')} Nuevo objetivo</button>`:''}</h3>
+    ${objetivosSemanales.length? `<ul class="mono-list">${objetivosSemanales.map(o=>`
+      <li>
+        <span>
+          <strong>${esc(o.texto)}</strong>
+          <div class="cell-muted" style="font-size:11.5px; margin-top:3px;">
+            ${o.destinoStudentNombre? 'Alumno: '+esc(o.destinoStudentNombre) : o.destinoSectionNombre? 'Entorno: '+esc(o.destinoSectionNombre)+(o.destinoGrupoNombres&&o.destinoGrupoNombres.length? ' · Grupos: '+esc(o.destinoGrupoNombres.join(', ')):'') : (o.destinoGrupoNombres&&o.destinoGrupoNombres.length? 'Grupos: '+esc(o.destinoGrupoNombres.join(', ')) : 'Todos los grupos')}
+            ${o.archivo? ` · <a href="${o.archivo.url}" target="_blank" rel="noopener">${esc(o.archivo.nombre)}</a>`:''}
+          </div>
+        </span>
+        ${(session.role==='admin' || o.createdBy===session.userId)? `<span class="tag-remove" data-action="del-objetivo-semanal" data-id="${o.id}">${icon('x','icon-sm')}</span>`:''}
+      </li>`).join('')}</ul>` : `<div class="empty-state">Sin objetivos semanales asignados</div>`}
+  </div>
+
   <div class="section-card">
     <h3>Consignas ${canEdit? `<button class="btn btn-sm" data-action="add-consigna">${icon('plus','icon-sm')} Agregar</button>`:''}</h3>
     ${consignas.length? `<ul class="mono-list">${consignas.map(cn=>`<li><span>${esc(cn.texto)}</span>${canEdit?`<span class="tag-remove" data-action="del-consigna" data-id="${cn.id}">${icon('x','icon-sm')}</span>`:''}</li>`).join('')}</ul>` : `<div class="empty-state">Sin consignas cargadas</div>`}
   </div>
-  <div class="section-card">
-    <h3>Objetivos semanales ${canEdit? `<button class="btn btn-sm" data-action="add-objetivo">${icon('plus','icon-sm')} Agregar</button>`:''}</h3>
-    ${objetivos.length? `<ul class="mono-list">${objetivos.slice().sort((a,b)=>a.semana-b.semana).map(o=>`<li><span><strong>Semana ${o.semana}:</strong> ${esc(o.texto)}</span>${canEdit?`<span class="tag-remove" data-action="del-objetivo" data-id="${o.id}">${icon('x','icon-sm')}</span>`:''}</li>`).join('')}</ul>` : `<div class="empty-state">Sin objetivos cargados</div>`}
-  </div>
   ${renderComunicadosSection()}`;
+}
+
+function objetivoGeneralFormHtml(){
+  const og = DB.config.objetivoGeneral;
+  return `
+  <div class="field"><label for="f-objgen-url">Enlace de Google Drive</label><input class="input" id="f-objgen-url" placeholder="https://drive.google.com/..." value="${og&&og.tipo==='link'?esc(og.url):''}"></div>
+  <p class="cell-muted" style="font-size:12px; margin:6px 0 14px;">— o, si preferís, subí un archivo (esto reemplaza el enlace de arriba) —</p>
+  <div class="field">
+    <label class="file-drop" for="f-objgen-file" style="display:flex; flex-direction:column; align-items:center; gap:6px; padding:24px 16px;">
+      ${icon('upload','icon-lg')}
+      <div id="f-objgen-file-text" style="font-weight:650; font-size:13.5px;">${og&&og.tipo==='archivo'?esc(og.nombre):'Hacé clic para subir PDF, DOC o DOCX'}</div>
+    </label>
+    <input type="file" id="f-objgen-file" accept=".pdf,.doc,.docx" style="display:none;">
+  </div>
+  <div id="f-objgen-progress-wrap" style="display:none; margin-top:9px;"><div class="bar-track"><div class="bar-fill" id="f-objgen-progress-bar" style="width:0%;"></div></div></div>
+  `;
+}
+
+function objetivoSemanalFormHtml(){
+  return `
+  <div class="field"><label for="f-osem-texto">Objetivo</label><textarea class="input" id="f-osem-texto" style="min-height:80px;" placeholder="Describí el objetivo de la semana..."></textarea></div>
+  <div class="field"><label for="f-osem-destino">Asignar a</label>
+    <select class="select" id="f-osem-destino" style="width:100%;" onchange="document.querySelectorAll('.f-osem-destino-panel').forEach(p=>p.style.display='none'); const el=document.getElementById('f-osem-panel-'+this.value); if(el) el.style.display='block';">
+      <option value="todos">Todos los grupos</option>
+      <option value="alumno">Un alumno específico</option>
+      <option value="grupo">Un grupo</option>
+      <option value="grupos">Varios grupos</option>
+      <option value="seccion">Una sección / entorno productivo</option>
+    </select>
+  </div>
+  <div class="f-osem-destino-panel" id="f-osem-panel-alumno" style="display:none;">
+    <div class="field"><label for="f-osem-alumno">Alumno</label>
+      <select class="select" id="f-osem-alumno" style="width:100%;">${(DB.students||[]).map(s=>`<option value="${s.id}">${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}</select>
+    </div>
+  </div>
+  <div class="f-osem-destino-panel" id="f-osem-panel-grupo" style="display:none;">
+    <div class="field"><label for="f-osem-grupo">Grupo</label>
+      <select class="select" id="f-osem-grupo" style="width:100%;">${(DB.groups||[]).map(g=>`<option value="${g.id}">${esc(g.nombre)}</option>`).join('')}</select>
+    </div>
+  </div>
+  <div class="f-osem-destino-panel" id="f-osem-panel-grupos" style="display:none;">
+    <div class="field"><label>Grupos (mantené Ctrl / Cmd para elegir varios)</label>
+      <select class="select" id="f-osem-grupos" multiple size="5" style="width:100%;">${(DB.groups||[]).map(g=>`<option value="${g.id}">${esc(g.nombre)}</option>`).join('')}</select>
+    </div>
+  </div>
+  <div class="f-osem-destino-panel" id="f-osem-panel-seccion" style="display:none;">
+    <div class="field"><label for="f-osem-seccion">Entorno Productivo</label>
+      <select class="select" id="f-osem-seccion" style="width:100%;">${(DB.sections||[]).map(s=>`<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>También limitar a estos grupos (opcional)</label>
+      <select class="select" id="f-osem-seccion-grupos" multiple size="4" style="width:100%;">${(DB.groups||[]).map(g=>`<option value="${g.id}">${esc(g.nombre)}</option>`).join('')}</select>
+    </div>
+  </div>
+  <div class="field">
+    <label class="file-drop" for="f-osem-file" style="display:flex; align-items:center; justify-content:center; gap:8px; padding:16px;">
+      ${icon('upload','icon-sm')} <span id="f-osem-file-text" style="font-size:12.5px; font-weight:600;">Adjuntar PDF, DOC o DOCX (opcional)</span>
+    </label>
+    <input type="file" id="f-osem-file" accept=".pdf,.doc,.docx" style="display:none;">
+  </div>
+  <div id="f-osem-progress-wrap" style="display:none; margin-top:9px;"><div class="bar-track"><div class="bar-fill" id="f-osem-progress-bar" style="width:0%;"></div></div></div>
+  `;
 }
 function renderComunicadosSection(){
   const comunicados = (DB.comunicados||[]).slice();
@@ -2762,7 +2878,6 @@ function renderRegistrosAdmin(){
     <select class="select" data-action="filter-rd-seccion"><option value="">Todos los entornos</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
     <input class="input" type="date" data-action="filter-rd-fecha" value="${f.fecha||''}" title="Fecha">
     <select class="select" data-action="filter-rd-estado"><option value="">Todos los estados</option>
-      <option value="borrador" ${f.estado==='borrador'?'selected':''}>Borrador</option>
       <option value="enviada" ${f.estado==='enviada'?'selected':''}>Enviada</option>
       <option value="en_revision" ${f.estado==='en_revision'?'selected':''}>En revisión</option>
       <option value="corregida" ${f.estado==='corregida'?'selected':''}>Corregida</option>
@@ -3168,7 +3283,8 @@ function renderModal(){
   else if(m.type==='rotation-form'){ title='Cargar rotación'; wide=true; body = rotationFormHtml(m.data); }
   else if(m.type==='guidelines-form'){ title='Editar lineamientos'; body = guidelinesFormHtml(); }
   else if(m.type==='consigna-form'){ title='Nueva consigna'; body = `<div class="field"><label for="f-consigna">Texto</label><textarea class="input" id="f-consigna"></textarea></div>`; }
-  else if(m.type==='objetivo-form'){ title='Nuevo objetivo semanal'; body = `<div class="field-row"><div class="field"><label for="f-obj-semana">Semana</label><input class="input" type="number" min="1" max="${DB.config.totalWeeks}" id="f-obj-semana"></div></div><div class="field"><label for="f-obj-texto">Objetivo</label><textarea class="input" id="f-obj-texto"></textarea></div>`; }
+  else if(m.type==='objetivo-semanal-form'){ title='Nuevo objetivo semanal'; wide=true; body = objetivoSemanalFormHtml(); }
+  else if(m.type==='objetivo-general-form'){ title='Objetivo General del establecimiento'; body = objetivoGeneralFormHtml(); }
   else if(m.type==='pendiente-form'){ title='Nuevo contenido pendiente'; body = pendienteFormHtml(); }
   else if(m.type==='quick-week-form'){ title='Cargar semana'; body = quickWeekFormHtml(m.data); }
   else if(m.type==='documento-form'){ title='Subir documento'; body = documentoFormHtml(); }
@@ -3519,6 +3635,23 @@ function attachGlobalEvents(){
   if(globalEventsAttached) return; // el #app persiste entre renders (solo cambia su innerHTML);
   globalEventsAttached = true;      // sin este guard, cada render() apilaría un listener más.
 
+  // Carrusel de rotaciones: arrastre con mouse en escritorio (el swipe táctil ya es nativo por overflow-x:auto).
+  let rotDragState = null;
+  app.addEventListener('mousedown', (e)=>{
+    const carousel = e.target.closest('.rot-carousel');
+    if(!carousel) return;
+    rotDragState = { carousel, startX: e.pageX, scrollStart: carousel.scrollLeft };
+    carousel.classList.add('dragging');
+  });
+  document.addEventListener('mousemove', (e)=>{
+    if(!rotDragState) return;
+    e.preventDefault();
+    rotDragState.carousel.scrollLeft = rotDragState.scrollStart - (e.pageX - rotDragState.startX);
+  });
+  document.addEventListener('mouseup', ()=>{
+    if(rotDragState){ rotDragState.carousel.classList.remove('dragging'); rotDragState = null; }
+  });
+
   app.addEventListener('dragstart', (e)=>{
     const t = e.target.closest('[data-drag-rotation]');
     if(t) e.dataTransfer.setData('text/rotation-id', t.getAttribute('data-drag-rotation'));
@@ -3840,7 +3973,8 @@ function attachGlobalEvents(){
     else if(action==='edit-rotation'){ ui.modal={type:'rotation-form', data:DB.rotations.find(r=>r.id===id)}; render(); }
     else if(action==='edit-guidelines'){ ui.modal={type:'guidelines-form', data:null}; render(); }
     else if(action==='add-consigna'){ ui.modal={type:'consigna-form', data:null}; render(); }
-    else if(action==='add-objetivo'){ ui.modal={type:'objetivo-form', data:null}; render(); }
+    else if(action==='new-objetivo-semanal'){ ui.modal={type:'objetivo-semanal-form', data:null}; render(); }
+    else if(action==='edit-objetivo-general'){ ui.modal={type:'objetivo-general-form', data:null}; render(); }
     else if(action==='new-pendiente'){ ui.modal={type:'pendiente-form', data:null}; render(); }
     else if(action==='new-documento'){ ui.modal={type:'documento-form', data:null}; render(); }
     else if(action==='new-planilla'){ ui.modal={type:'planilla-form', data:null}; render(); }
@@ -3897,7 +4031,7 @@ function attachGlobalEvents(){
     }
     else if(action==='rd-eliminar'){
       askConfirm({
-        title:'Eliminar planilla', message:'¿Eliminar esta planilla diaria? Se puede restaurar desde la papelera durante 30 días.',
+        title:'Eliminar planilla', message:'¿Está seguro de que desea eliminar esta planilla? Esta acción no se puede deshacer. (Podrá restaurarla desde la papelera durante 30 días.)',
         confirmLabel:'Eliminar', danger:true,
         onConfirm: async ()=>{
           try{ await apiFetch('DELETE','/api/registros/'+id); await loadRegistrosAdmin(); ui.view='registros'; RD=null; render(); toast('Planilla eliminada'); }
@@ -3957,7 +4091,7 @@ function attachGlobalEvents(){
       catch(e){ toast(e.message||'No se pudo guardar','red'); }
     }
     else if(action==='del-consigna'){ try{ await apiFetch('DELETE','/api/consignas/'+id); await loadDB(['consignas']); render(); }catch(e){ toast(e.message||'Error','red'); } }
-    else if(action==='del-objetivo'){ try{ await apiFetch('DELETE','/api/objetivos/'+id); await loadDB(['objetivos']); render(); }catch(e){ toast(e.message||'Error','red'); } }
+    else if(action==='del-objetivo-semanal'){ try{ await apiFetch('DELETE','/api/objetivos-semanales/'+id); await loadObjetivosSemanales(); render(); }catch(e){ toast(e.message||'Error','red'); } }
     else if(action==='new-comunicado'){ ui.modal={type:'comunicado-form', data:null}; render(); }
     else if(action==='ver-comunicado'){ ui.modal={type:'comunicado-detalle', data:(DB.comunicados||[]).find(c=>c.id===id)}; render(); }
     else if(action==='abrir-comunicado'){
@@ -4034,6 +4168,8 @@ function attachGlobalEvents(){
       const type = t.getAttribute('data-type');
       if(type==='documento-form') await uploadDocumento();
       else if(type==='comunicado-form') await uploadComunicado();
+      else if(type==='objetivo-semanal-form') await uploadObjetivoSemanal();
+      else if(type==='objetivo-general-form') await uploadObjetivoGeneral();
       else await submitModal(action, type, t.getAttribute('data-id'));
     }
     else if(action==='sort-th'){
@@ -4366,6 +4502,101 @@ async function uploadComunicado(){
   }
 }
 
+async function loadObjetivosSemanales(){ await loadDB(['objetivosSemanales']); }
+
+async function uploadObjetivoGeneral(){
+  const url = document.getElementById('f-objgen-url').value.trim();
+  const file = document.getElementById('f-objgen-file').files[0];
+  if(!url && !file){ toast('Pegá un enlace de Drive o subí un archivo','red'); return; }
+
+  const fd = new FormData();
+  if(file) fd.append('file', file);
+  else fd.append('url', url);
+
+  const progressWrap = document.getElementById('f-objgen-progress-wrap');
+  const progressBar = document.getElementById('f-objgen-progress-bar');
+  if(file && progressWrap) progressWrap.style.display='block';
+  const saveBtn = document.querySelector('[data-action="submit-modal"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Guardando…'; }
+
+  try{
+    await new Promise((resolve, reject)=>{
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', API_BASE+'/api/objetivo-general');
+      xhr.setRequestHeader('Authorization', 'Bearer '+authToken);
+      xhr.upload.onprogress = (e)=>{ if(e.lengthComputable && progressBar) progressBar.style.width = Math.round((e.loaded/e.total)*100)+'%'; };
+      xhr.onload = ()=>{
+        if(xhr.status>=200 && xhr.status<300) resolve();
+        else{ let msg='No se pudo guardar el Objetivo General'; try{ msg = JSON.parse(xhr.responseText).error||msg; }catch(e){} reject(new Error(msg)); }
+      };
+      xhr.onerror = ()=> reject(new Error('Error de conexión'));
+      xhr.send(fd);
+    });
+    ui.modal = null;
+    await loadDB(['config','activityLog']);
+    render();
+    toast('Objetivo General actualizado');
+  }catch(e){
+    toast(e.message||'No se pudo guardar', 'red');
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Guardar'; }
+    if(progressWrap) progressWrap.style.display='none';
+  }
+}
+
+async function uploadObjetivoSemanal(){
+  const texto = document.getElementById('f-osem-texto').value.trim();
+  if(!texto){ toast('Escribí el objetivo','red'); return; }
+  const destinoTipo = document.getElementById('f-osem-destino').value;
+
+  const fd = new FormData();
+  fd.append('texto', texto);
+  fd.append('destinoTipo', destinoTipo);
+  if(destinoTipo==='alumno'){
+    fd.append('destinoStudentId', document.getElementById('f-osem-alumno').value);
+  } else if(destinoTipo==='grupo'){
+    fd.append('destinoGroupIds', document.getElementById('f-osem-grupo').value);
+  } else if(destinoTipo==='grupos'){
+    const ids = Array.from(document.getElementById('f-osem-grupos').selectedOptions).map(o=>o.value);
+    if(!ids.length){ toast('Elegí al menos un grupo','red'); return; }
+    fd.append('destinoGroupIds', ids.join(','));
+  } else if(destinoTipo==='seccion'){
+    fd.append('destinoSectionId', document.getElementById('f-osem-seccion').value);
+    const ids = Array.from(document.getElementById('f-osem-seccion-grupos').selectedOptions).map(o=>o.value);
+    if(ids.length) fd.append('destinoGroupIds', ids.join(','));
+  }
+  const file = document.getElementById('f-osem-file').files[0];
+  if(file) fd.append('file', file);
+
+  const progressWrap = document.getElementById('f-osem-progress-wrap');
+  const progressBar = document.getElementById('f-osem-progress-bar');
+  if(file && progressWrap) progressWrap.style.display='block';
+  const saveBtn = document.querySelector('[data-action="submit-modal"]');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Guardando…'; }
+
+  try{
+    await new Promise((resolve, reject)=>{
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', API_BASE+'/api/objetivos-semanales');
+      xhr.setRequestHeader('Authorization', 'Bearer '+authToken);
+      xhr.upload.onprogress = (e)=>{ if(e.lengthComputable && progressBar) progressBar.style.width = Math.round((e.loaded/e.total)*100)+'%'; };
+      xhr.onload = ()=>{
+        if(xhr.status>=200 && xhr.status<300) resolve();
+        else{ let msg='No se pudo asignar el objetivo'; try{ msg = JSON.parse(xhr.responseText).error||msg; }catch(e){} reject(new Error(msg)); }
+      };
+      xhr.onerror = ()=> reject(new Error('Error de conexión'));
+      xhr.send(fd);
+    });
+    ui.modal = null;
+    await loadObjetivosSemanales();
+    render();
+    toast('Objetivo semanal asignado');
+  }catch(e){
+    toast(e.message||'No se pudo asignar', 'red');
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Guardar'; }
+    if(progressWrap) progressWrap.style.display='none';
+  }
+}
+
 async function submitModal(action, type, id){
   try{
     if(type==='student-form'){
@@ -4425,12 +4656,6 @@ async function submitModal(action, type, id){
       const texto = val('f-consigna');
       if(texto) await apiFetch('POST', '/api/consignas', { texto });
       await loadDB(['consignas','activityLog']); ui.modal=null; render();
-    }
-    else if(type==='objetivo-form'){
-      const sem = Number(val('f-obj-semana'))||1;
-      const texto = val('f-obj-texto');
-      if(texto) await apiFetch('POST', '/api/objetivos', { semana:sem, texto });
-      await loadDB(['objetivos','activityLog']); ui.modal=null; render();
     }
     else if(type==='pendiente-form'){
       const sectionId = val('f-pend-seccion'); const studentId = val('f-pend-alumno');
