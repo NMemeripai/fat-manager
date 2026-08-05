@@ -1146,13 +1146,22 @@ app.delete('/api/planillas/:id', auth, requireRole('admin'), h(async (req, res) 
 }));
 
 /* =========================================================================
-   REGISTRO DIARIO DE ACTIVIDADES (Panel del Alumno)
+   REGISTRO DIARIO DE ACTIVIDADES (Panel del Alumno + Panel del Administrador)
    Bitácora diaria mobile-first que completa el propio alumno (reemplaza la
    planilla en papel). Es un feature aparte de "Planillas Digitales FAT" de
    arriba (esa la cargan los profesores; esta la carga el alumno día a día).
    No incluye firma digital por pedido explícito.
    ========================================================================= */
 const REGISTROS_COL = 'registrosDiarios';
+const NOTIFICACIONES_COL = 'notificacionesAlumno';
+const REGISTRO_TRASH_DAYS = 30; // ventana para restaurar una planilla eliminada
+const ALLOWED_ARCHIVO_EXT = ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png'];
+function archivoTipoOf(ext) {
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.doc' || ext === '.docx') return 'word';
+  if (ext === '.jpg' || ext === '.jpeg' || ext === '.png') return 'imagen';
+  return 'otro';
+}
 
 function canTouchRegistro(user, r) {
   if (user.role === 'admin') return true;
@@ -1163,6 +1172,17 @@ function canTouchRegistro(user, r) {
 function canViewRegistro(user, r) {
   if (user.role === 'viewadmin' || user.role === 'coordinador') return true;
   return canTouchRegistro(user, r);
+}
+async function agregarHistorial(id, entry) {
+  const r = await docData(REGISTROS_COL, id);
+  const historial = [...(r.historial || []), { ...entry, fecha: new Date().toISOString() }];
+  await db.collection(REGISTROS_COL).doc(id).update({ historial });
+}
+async function notificarAlumno(studentId, mensaje, tipo, registroId) {
+  const id = uid('notif');
+  await db.collection(NOTIFICACIONES_COL).doc(id).set({
+    studentId, mensaje, tipo, registroId, leida: false, fecha: new Date().toISOString()
+  });
 }
 
 // Alumno: trae (o indica que no existe) el registro de una fecha puntual, más los
@@ -1175,7 +1195,7 @@ app.get('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, r
 
   if (req.query.fecha) {
     const fecha = String(req.query.fecha);
-    const existentes = await whereEquals(REGISTROS_COL, 'studentId', studentId);
+    const existentes = (await whereEquals(REGISTROS_COL, 'studentId', studentId)).filter(r => !r.deletedAt);
     const registro = existentes.find(r => r.fecha === fecha) || null;
 
     const group = student.groupId ? await docData('groups', student.groupId) : null;
@@ -1196,15 +1216,16 @@ app.get('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, r
   }
 
   // Sin ?fecha= -> historial completo del alumno ("Mis Planillas")
-  const list = await whereEquals(REGISTROS_COL, 'studentId', studentId);
+  const list = (await whereEquals(REGISTROS_COL, 'studentId', studentId)).filter(r => !r.deletedAt);
   list.sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
-  res.json({ registros: list.map(r => ({ id: r.id, fecha: r.fecha, sectionId: r.sectionId, sectionNombre: r.sectionNombre, cantidadActividades: (r.actividades || []).length, estado: r.estado })) });
+  res.json({ registros: list.map(r => ({ id: r.id, fecha: r.fecha, sectionId: r.sectionId, sectionNombre: r.sectionNombre, modo: r.modo || 'formulario', cantidadActividades: (r.actividades || []).length, estado: r.estado })) });
 }));
 
 app.get('/api/mi-portal/registros/:id', auth, requireRole('alumno'), h(async (req, res) => {
   const r = await docData(REGISTROS_COL, req.params.id);
-  if (!r || r.studentId !== req.user.studentId) return res.status(404).json({ error: 'Registro no encontrado' });
-  res.json(r);
+  if (!r || r.studentId !== req.user.studentId || r.deletedAt) return res.status(404).json({ error: 'Registro no encontrado' });
+  const { comentarioPrivado, ...safe } = r; // el comentario privado nunca se expone al alumno
+  res.json(safe);
 }));
 
 app.post('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, res) => {
@@ -1212,10 +1233,10 @@ app.post('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, 
   if (!studentId) return res.status(400).json({ error: 'Esta cuenta no está vinculada a ningún alumno' });
   const student = await docData('students', studentId);
   if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
-  const { fecha, sectionId, mep } = req.body || {};
+  const { fecha, sectionId, mep, modo } = req.body || {};
   if (!fecha) return res.status(400).json({ error: 'Falta la fecha' });
 
-  const existentes = await whereEquals(REGISTROS_COL, 'studentId', studentId);
+  const existentes = (await whereEquals(REGISTROS_COL, 'studentId', studentId)).filter(r => !r.deletedAt);
   const dupe = existentes.find(r => r.fecha === fecha);
   if (dupe) return res.status(200).json({ id: dupe.id }); // ya existe: idempotente, devolvemos el mismo
 
@@ -1225,8 +1246,11 @@ app.post('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, 
     studentId, curso: student.curso, division: student.division, groupId: student.groupId || null,
     fecha, sectionId: sectionId || null, sectionNombre: section ? section.nombre : null,
     teacherId: section ? section.teacherId : null, mep: mep || '',
+    modo: modo === 'archivo' ? 'archivo' : 'formulario', archivoAdjunto: null,
     actividades: [], datos: '', higieneSeguridad: '', bpa: '',
-    estado: 'borrador', observacionesDocente: '',
+    estado: 'borrador', observacionesDocente: '', comentarioPrivado: '',
+    historial: [{ fecha: new Date().toISOString(), usuario: student.nombre + ' ' + student.apellido, accion: 'creada', detalle: 'Planilla creada' }],
+    deletedAt: null, deletedBy: null, lastModifiedBy: { nombre: student.nombre + ' ' + student.apellido, role: 'alumno' },
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
   };
   await db.collection(REGISTROS_COL).doc(id).set(record);
@@ -1236,10 +1260,10 @@ app.post('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, 
 // Autoguardado: el alumno solo puede editar mientras está en borrador o corregida (una vez enviada/aprobada, se congela)
 app.put('/api/mi-portal/registros/:id', auth, requireRole('alumno'), h(async (req, res) => {
   const r = await docData(REGISTROS_COL, req.params.id);
-  if (!r || r.studentId !== req.user.studentId) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (!r || r.studentId !== req.user.studentId || r.deletedAt) return res.status(404).json({ error: 'Registro no encontrado' });
   if (!['borrador', 'corregida'].includes(r.estado)) return res.status(403).json({ error: 'Esta planilla ya fue enviada y no se puede editar' });
 
-  const allowed = ['sectionId', 'mep', 'actividades', 'datos', 'higieneSeguridad', 'bpa'];
+  const allowed = ['sectionId', 'mep', 'actividades', 'datos', 'higieneSeguridad', 'bpa', 'modo'];
   const update = { updatedAt: new Date().toISOString() };
   for (const k of allowed) if (req.body && req.body[k] !== undefined) update[k] = req.body[k];
   if (update.sectionId !== undefined) {
@@ -1247,16 +1271,20 @@ app.put('/api/mi-portal/registros/:id', auth, requireRole('alumno'), h(async (re
     update.sectionNombre = section ? section.nombre : null;
     update.teacherId = section ? section.teacherId : r.teacherId;
   }
+  const student = await docData('students', r.studentId);
+  update.lastModifiedBy = { nombre: student ? student.nombre + ' ' + student.apellido : 'Alumno', role: 'alumno' };
   await db.collection(REGISTROS_COL).doc(req.params.id).update(update);
   res.json({ ok: true });
 }));
 
 app.post('/api/mi-portal/registros/:id/enviar', auth, requireRole('alumno'), h(async (req, res) => {
   const r = await docData(REGISTROS_COL, req.params.id);
-  if (!r || r.studentId !== req.user.studentId) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (!r || r.studentId !== req.user.studentId || r.deletedAt) return res.status(404).json({ error: 'Registro no encontrado' });
   if (!['borrador', 'corregida'].includes(r.estado)) return res.status(403).json({ error: 'Esta planilla ya fue enviada' });
+  if (r.modo === 'archivo' && !r.archivoAdjunto) return res.status(400).json({ error: 'Subí el archivo de tu planilla antes de enviarla' });
   await db.collection(REGISTROS_COL).doc(req.params.id).update({ estado: 'enviada', updatedAt: new Date().toISOString() });
   const student = await docData('students', r.studentId);
+  await agregarHistorial(req.params.id, { usuario: student ? student.nombre + ' ' + student.apellido : 'Alumno', accion: 'enviada', detalle: 'El alumno envió la planilla' });
   await logActivity(`${student ? student.nombre + ' ' + student.apellido : 'Un alumno'} envió su planilla diaria del ${r.fecha}.`);
   res.json({ ok: true });
 }));
@@ -1266,7 +1294,7 @@ app.post('/api/mi-portal/registros/:id/enviar', auth, requireRole('alumno'), h(a
 app.post('/api/mi-portal/registros/:id/foto', auth, requireRole('alumno'), upload.single('file'), h(async (req, res) => {
   if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
   const r = await docData(REGISTROS_COL, req.params.id);
-  if (!r || r.studentId !== req.user.studentId) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (!r || r.studentId !== req.user.studentId || r.deletedAt) return res.status(404).json({ error: 'Registro no encontrado' });
   if (!['borrador', 'corregida'].includes(r.estado)) return res.status(403).json({ error: 'Esta planilla ya fue enviada y no se puede editar' });
   if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
   const result = await new Promise((resolve, reject) => {
@@ -1279,9 +1307,56 @@ app.post('/api/mi-portal/registros/:id/foto', auth, requireRole('alumno'), uploa
   res.status(201).json({ url: result.secure_url, publicId: result.public_id, nombre: req.file.originalname });
 }));
 
-/* ---------------------------- Panel del Docente: revisión de registros diarios ---------------------------- */
+// Opción 2 del alumno: subir una planilla ya realizada (PDF/DOC/DOCX/JPG/PNG) en vez de completarla en el formulario.
+app.post('/api/mi-portal/registros/:id/archivo', auth, requireRole('alumno'), upload.single('file'), h(async (req, res) => {
+  if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
+  const r = await docData(REGISTROS_COL, req.params.id);
+  if (!r || r.studentId !== req.user.studentId || r.deletedAt) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (!['borrador', 'corregida'].includes(r.estado)) return res.status(403).json({ error: 'Esta planilla ya fue enviada y no se puede editar' });
+  if (!req.file) return res.status(400).json({ error: 'No se envió ningún archivo' });
+  const ext = extOf(req.file.originalname);
+  if (!ALLOWED_ARCHIVO_EXT.includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Usá PDF, DOC, DOCX, JPG o PNG.' });
+  const tipo = archivoTipoOf(ext);
+  const result = await new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: 'fat-manager/registros-archivos', resource_type: tipo === 'imagen' ? 'image' : 'raw', public_id: uid('planilla') + ext },
+      (err, rr) => err ? reject(err) : resolve(rr)
+    );
+    stream.end(req.file.buffer);
+  });
+  const archivoAdjunto = { url: result.secure_url, publicId: result.public_id, nombre: req.file.originalname, tamano: req.file.size, tipo };
+  await db.collection(REGISTROS_COL).doc(req.params.id).update({ archivoAdjunto, updatedAt: new Date().toISOString() });
+  res.status(201).json({ archivoAdjunto });
+}));
+
+// Reemplazar o quitar el archivo adjunto antes de enviar la planilla.
+app.delete('/api/mi-portal/registros/:id/archivo', auth, requireRole('alumno'), h(async (req, res) => {
+  const r = await docData(REGISTROS_COL, req.params.id);
+  if (!r || r.studentId !== req.user.studentId || r.deletedAt) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (!['borrador', 'corregida'].includes(r.estado)) return res.status(403).json({ error: 'Esta planilla ya fue enviada y no se puede editar' });
+  await db.collection(REGISTROS_COL).doc(req.params.id).update({ archivoAdjunto: null, updatedAt: new Date().toISOString() });
+  res.json({ ok: true });
+}));
+
+/* ---------------------------- Notificaciones del alumno ---------------------------- */
+app.get('/api/mi-portal/notificaciones', auth, requireRole('alumno'), h(async (req, res) => {
+  const list = await whereEquals(NOTIFICACIONES_COL, 'studentId', req.user.studentId);
+  list.sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+  res.json({ notificaciones: list.slice(0, 30) });
+}));
+app.post('/api/mi-portal/notificaciones/:id/leida', auth, requireRole('alumno'), h(async (req, res) => {
+  const n = await docData(NOTIFICACIONES_COL, req.params.id);
+  if (!n || n.studentId !== req.user.studentId) return res.status(404).json({ error: 'Notificación no encontrada' });
+  await db.collection(NOTIFICACIONES_COL).doc(req.params.id).update({ leida: true });
+  res.json({ ok: true });
+}));
+
+/* ---------------------------- Panel del Docente / Administrador: gestión de registros diarios ---------------------------- */
 app.get('/api/registros', auth, blockAlumno, h(async (req, res) => {
   let list = await allDocs(REGISTROS_COL);
+  const papelera = req.query.papelera === '1';
+  if (papelera && req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador puede ver la papelera' });
+  list = list.filter(r => papelera ? !!r.deletedAt : !r.deletedAt);
   if (req.user.role === 'seccion') list = list.filter(r => r.teacherId === req.user.teacherId);
   const { curso, groupId, studentId, sectionId, fecha, estado } = req.query;
   if (curso) list = list.filter(r => r.curso === curso);
@@ -1295,7 +1370,7 @@ app.get('/api/registros', auth, blockAlumno, h(async (req, res) => {
   const byId = Object.fromEntries(students.map(s => [s.id, s]));
   const enriched = list.map(r => {
     const s = byId[r.studentId];
-    return { ...r, actividades: undefined, cantidadActividades: (r.actividades || []).length, studentNombre: s ? s.nombre + ' ' + s.apellido : '—' };
+    return { ...r, actividades: undefined, comentarioPrivado: undefined, cantidadActividades: (r.actividades || []).length, studentNombre: s ? s.nombre + ' ' + s.apellido : '—' };
   });
   res.json({ registros: enriched });
 }));
@@ -1308,18 +1383,85 @@ app.get('/api/registros/:id', auth, blockAlumno, h(async (req, res) => {
   res.json({ ...r, studentNombre: student ? student.nombre + ' ' + student.apellido : '—' });
 }));
 
+// Edición completa por parte del administrador (cualquier campo, cualquier planilla).
+app.put('/api/registros/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const r = await docData(REGISTROS_COL, req.params.id);
+  if (!r) return res.status(404).json({ error: 'Registro no encontrado' });
+  const allowed = ['sectionId', 'mep', 'actividades', 'datos', 'higieneSeguridad', 'bpa', 'estado'];
+  const update = { updatedAt: new Date().toISOString(), lastModifiedBy: { nombre: req.user.nombre, role: req.user.role } };
+  for (const k of allowed) if (req.body && req.body[k] !== undefined) update[k] = req.body[k];
+  if (update.sectionId !== undefined) {
+    const section = update.sectionId ? await docData('sections', update.sectionId) : null;
+    update.sectionNombre = section ? section.nombre : null;
+  }
+  await db.collection(REGISTROS_COL).doc(req.params.id).update(update);
+  await agregarHistorial(req.params.id, { usuario: req.user.nombre, accion: 'editada', detalle: 'El administrador editó la planilla' });
+  res.json({ ok: true });
+}));
+
+// Comentarios: uno privado (solo docentes/admin) y uno visible para el alumno.
+app.post('/api/registros/:id/comentario', auth, requireRole('admin', 'seccion', 'coordinador'), h(async (req, res) => {
+  const r = await docData(REGISTROS_COL, req.params.id);
+  if (!r) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (!canTouchRegistro(req.user, r) && req.user.role !== 'coordinador') return res.status(403).json({ error: 'No tenés permiso sobre este registro' });
+  const { texto, privado } = req.body || {};
+  if (!texto || !texto.trim()) return res.status(400).json({ error: 'El comentario no puede estar vacío' });
+  const update = { updatedAt: new Date().toISOString() };
+  if (privado) update.comentarioPrivado = texto;
+  else update.observacionesDocente = texto;
+  await db.collection(REGISTROS_COL).doc(req.params.id).update(update);
+  await agregarHistorial(req.params.id, { usuario: req.user.nombre, accion: privado ? 'comentario privado' : 'comentario para el alumno', detalle: texto });
+  res.json({ ok: true });
+}));
+
 app.put('/api/registros/:id/revisar', auth, requireRole('admin', 'seccion', 'coordinador'), h(async (req, res) => {
   const r = await docData(REGISTROS_COL, req.params.id);
   if (!r) return res.status(404).json({ error: 'Registro no encontrado' });
   if (!canTouchRegistro(req.user, r) && req.user.role !== 'coordinador') return res.status(403).json({ error: 'No tenés permiso para revisar este registro' });
   const { estado, observacionesDocente } = req.body || {};
-  if (!['corregida', 'aprobada'].includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
-  if (r.estado !== 'enviada' && r.estado !== 'corregida') return res.status(403).json({ error: 'Solo se pueden revisar planillas enviadas' });
-  await db.collection(REGISTROS_COL).doc(req.params.id).update({
-    estado, observacionesDocente: observacionesDocente || '', updatedAt: new Date().toISOString()
-  });
+  if (!['en_revision', 'corregida', 'aprobada', 'rechazada'].includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
+  if (!['enviada', 'en_revision', 'corregida'].includes(r.estado)) return res.status(403).json({ error: 'Solo se pueden revisar planillas enviadas' });
+  const update = { estado, updatedAt: new Date().toISOString(), lastModifiedBy: { nombre: req.user.nombre, role: req.user.role } };
+  if (observacionesDocente !== undefined) update.observacionesDocente = observacionesDocente;
+  await db.collection(REGISTROS_COL).doc(req.params.id).update(update);
   const student = await docData('students', r.studentId);
-  await logActivity(`${req.user.nombre} ${estado === 'aprobada' ? 'aprobó' : 'corrigió'} la planilla diaria de ${student ? student.nombre + ' ' + student.apellido : 'un alumno'} del ${r.fecha}.`);
+  const nombreCompleto = student ? student.nombre + ' ' + student.apellido : 'un alumno';
+  const etiqueta = { en_revision: 'puso en revisión', corregida: 'pidió correcciones a', aprobada: 'aprobó', rechazada: 'rechazó' }[estado];
+  await agregarHistorial(req.params.id, { usuario: req.user.nombre, accion: estado, detalle: observacionesDocente || '' });
+  await logActivity(`${req.user.nombre} ${etiqueta} la planilla diaria de ${nombreCompleto} del ${r.fecha}.`);
+  if (['aprobada', 'rechazada', 'corregida'].includes(estado)) {
+    const mensajes = {
+      aprobada: `Tu planilla del ${fmtDateEs(r.fecha)} fue aprobada.`,
+      rechazada: `Tu planilla del ${fmtDateEs(r.fecha)} fue rechazada.`,
+      corregida: `Te pidieron corregir la planilla del ${fmtDateEs(r.fecha)}.`
+    };
+    await notificarAlumno(r.studentId, mensajes[estado], estado, req.params.id);
+  }
+  res.json({ ok: true });
+}));
+function fmtDateEs(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// Eliminar (papelera, con restauración durante REGISTRO_TRASH_DAYS días) — solo admin.
+app.delete('/api/registros/:id', auth, requireRole('admin'), h(async (req, res) => {
+  const r = await docData(REGISTROS_COL, req.params.id);
+  if (!r) return res.status(404).json({ error: 'Registro no encontrado' });
+  await db.collection(REGISTROS_COL).doc(req.params.id).update({ deletedAt: new Date().toISOString(), deletedBy: { nombre: req.user.nombre } });
+  await agregarHistorial(req.params.id, { usuario: req.user.nombre, accion: 'eliminada', detalle: `Enviada a la papelera (se puede restaurar hasta ${REGISTRO_TRASH_DAYS} días)` });
+  await logActivity(`${req.user.nombre} eliminó una planilla diaria (enviada a la papelera).`);
+  res.json({ ok: true });
+}));
+
+app.post('/api/registros/:id/restaurar', auth, requireRole('admin'), h(async (req, res) => {
+  const r = await docData(REGISTROS_COL, req.params.id);
+  if (!r || !r.deletedAt) return res.status(404).json({ error: 'Registro no encontrado en la papelera' });
+  const dias = (Date.now() - new Date(r.deletedAt).getTime()) / 86400000;
+  if (dias > REGISTRO_TRASH_DAYS) return res.status(410).json({ error: `Ya pasaron más de ${REGISTRO_TRASH_DAYS} días, esta planilla ya no se puede restaurar` });
+  await db.collection(REGISTROS_COL).doc(req.params.id).update({ deletedAt: null, deletedBy: null });
+  await agregarHistorial(req.params.id, { usuario: req.user.nombre, accion: 'restaurada', detalle: 'Restaurada desde la papelera' });
   res.json({ ok: true });
 }));
 
@@ -1328,6 +1470,7 @@ app.get('/api/usuarios', auth, requireRole('admin'), h(async (req, res) => {
   const users = await allDocs('users');
   const viewAdmins = users.filter(u => u.role === 'viewadmin')
     .map(u => ({ id: u.id, username: u.username, nombre: u.nombre, active: u.active !== false }));
+
   res.json({ usuarios: viewAdmins });
 }));
 
