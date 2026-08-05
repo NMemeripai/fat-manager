@@ -451,12 +451,17 @@ let CRITERIOS = null; // criterios de desempeño configurables
 let USUARIOS = null; // cuentas VIEW ADMIN (Gestión de Usuarios)
 let currentPlanillaId = null; // planilla abierta actualmente (vista detalle)
 let planillaViewMode = 'documento'; // 'documento' (estilo Word, solo lectura) | 'form' (edición)
+let RD = null; // Registro Diario (Panel del Alumno): planilla del día abierta actualmente
+let RD_LIST = null; // "Mis Planillas": historial del alumno
+let RD_ADMIN_LIST = null; // listado de registros diarios para el Panel del Docente
+let rdSaveTimer = null;
 let session = null;
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
   sort:{ students:{key:'legajo',dir:'asc'}, rotations:{key:'periodo',dir:'asc'}, documentosAlumno:{key:'fecha',dir:'desc'} },
   page:{ students:1, rotations:1, documentosAlumno:1 },
   sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
-  cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7), cronogramaTab:'semanal' };
+  cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7), cronogramaTab:'semanal',
+  spView:'home', rdFecha:todayISO(), rdFilters:{}, rdSort:{key:'fecha',dir:'desc'} };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -610,6 +615,56 @@ async function loadPlanillaDetalle(id){
   if(!CRITERIOS) await loadCriterios();
 }
 function getPlanilla(id){ return (PLANILLAS||[]).find(p=>p.id===id); }
+
+/* ---------------------------- REGISTRO DIARIO (Planilla del alumno / Panel del Docente) ---------------------------- */
+async function loadRegistroDiario(fecha){
+  const data = await apiFetch('GET', '/api/mi-portal/registros?fecha='+encodeURIComponent(fecha));
+  let reg = data.registro;
+  if(!reg){
+    const created = await apiFetch('POST', '/api/mi-portal/registros', { fecha, sectionId: data.sugerido.sectionId, mep:'' });
+    reg = await apiFetch('GET', '/api/mi-portal/registros/'+created.id);
+  }
+  reg._secciones = data.secciones;
+  reg._sugerido = data.sugerido;
+  RD = reg;
+}
+async function loadMisPlanillas(){
+  const data = await apiFetch('GET', '/api/mi-portal/registros');
+  RD_LIST = data.registros;
+}
+function autosaveRegistro(partial){
+  const statusEl = document.getElementById('rd-save-status');
+  if(statusEl){ statusEl.textContent = 'Guardando…'; statusEl.style.color = 'var(--text-3)'; }
+  clearTimeout(rdSaveTimer);
+  rdSaveTimer = setTimeout(async ()=>{
+    try{
+      await apiFetch('PUT', '/api/mi-portal/registros/'+RD.id, partial);
+      const el = document.getElementById('rd-save-status');
+      if(el){ el.textContent = 'Guardado ✓ '+new Date().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}); el.style.color='var(--green-2)'; }
+    }catch(e){
+      const el = document.getElementById('rd-save-status');
+      if(el){ el.textContent = 'No se pudo guardar: '+(e.message||'error'); el.style.color='var(--red)'; }
+    }
+  }, 700);
+}
+async function loadRegistrosAdmin(){
+  const f = ui.rdFilters;
+  const params = new URLSearchParams();
+  if(f.curso) params.set('curso', f.curso);
+  if(f.groupId) params.set('groupId', f.groupId);
+  if(f.studentId) params.set('studentId', f.studentId);
+  if(f.sectionId) params.set('sectionId', f.sectionId);
+  if(f.fecha) params.set('fecha', f.fecha);
+  if(f.estado) params.set('estado', f.estado);
+  const qs = params.toString();
+  const data = await apiFetch('GET', '/api/registros'+(qs?'?'+qs:''));
+  RD_ADMIN_LIST = data.registros;
+}
+function registroEstadoBadge(estado){
+  const map = {borrador:['neutral','Borrador'], enviada:['amber','Enviada'], corregida:['red','Corregida'], aprobada:['green','Aprobada']};
+  const [c,l] = map[estado]||['neutral',estado];
+  return `<span class="badge badge-${c}"><span class="badge-dot-ico"></span>${l}</span>`;
+}
 let planillaSaveTimer = null;
 async function downloadAuthFile(url, fallbackName){
   try{
@@ -820,26 +875,51 @@ function renderConfirmModal(){
    ========================================================================= */
 function renderStudentPortalPage(){
   if(!SP) return `<div class="login-wrap"><p style="color:var(--text-3);">Cargando…</p></div>`;
-  const c = SP.current;
-  const wk = SP.semanaActual;
-  const objetivoSemana = (SP.objetivos||[]).find(o=>o.semana===wk);
-  const misRespuestas = c ? (c.respuestasAlumno||[]).find(r=>r.semana===wk) : null;
-
   return `
   <div style="min-height:100vh; background:var(--bg);">
     <div class="topbar" style="position:sticky; top:0;">
+      ${ui.spView!=='home'? `<button class="icon-btn" data-action="sp-go-home" title="Volver" aria-label="Volver al inicio">${icon('arrowLeft','icon-sm')}</button>` : `
       <div class="brand" style="padding:0;">
         <div class="brand-mark">FAT</div>
         <div><div class="brand-name">Portal del Alumno</div></div>
-      </div>
+      </div>`}
       <div class="topbar-spacer"></div>
       <span class="cell-muted" style="font-size:13px; margin-right:10px;">${esc(SP.student.nombre)} ${esc(SP.student.apellido)}</span>
       <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema" aria-label="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
       <button class="btn btn-sm" data-action="logout" aria-label="Cerrar sesión">${icon('logout','icon-sm')} Salir</button>
     </div>
     <main class="content" style="max-width:760px; margin:0 auto;">
+      ${ui.spView==='registro'? renderRegistroDiarioForm() : ui.spView==='historial'? renderMisPlanillasHistorial() : renderSPHome()}
+    </main>
+  </div>
+  ${ui.modal? renderModal() : ''}
+  ${ui.confirm? renderConfirmModal() : ''}
+  `;
+}
+
+function renderSPHome(){
+  const c = SP.current;
+  const wk = SP.semanaActual;
+  const objetivoSemana = (SP.objetivos||[]).find(o=>o.semana===wk);
+  const misRespuestas = c ? (c.respuestasAlumno||[]).find(r=>r.semana===wk) : null;
+
+  return `
       <div class="page-head">
         <div><h1 class="page-title">Hola, ${esc(SP.student.nombre)} 👋</h1><p class="page-sub">${esc(SP.student.curso)} "${esc(SP.student.division)}" · Legajo ${esc(SP.student.legajo)}${wk? ' · Semana '+wk+' / '+SP.totalWeeks : ''}</p></div>
+      </div>
+
+      <div class="card" style="background:linear-gradient(135deg, var(--accent), var(--accent-2)); border:none; color:#fff; margin-bottom:16px;">
+        <div style="display:flex; align-items:center; gap:14px;">
+          <div style="width:44px; height:44px; border-radius:12px; background:rgba(255,255,255,.18); display:flex; align-items:center; justify-content:center; flex-shrink:0;">${icon('file','icon-lg')}</div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-weight:750; font-size:15px; font-family:'Plus Jakarta Sans',sans-serif;">Planilla diaria de actividades</div>
+            <div style="font-size:12.5px; opacity:.9;">Cargá lo que hiciste hoy en tu entorno productivo</div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:14px;">
+          <button class="btn" style="flex:1; justify-content:center; background:#fff; border-color:#fff; color:var(--accent-2);" data-action="sp-open-registro">${icon('edit','icon-sm')} Completar planilla de hoy</button>
+          <button class="btn btn-sm" style="background:rgba(255,255,255,.15); border-color:rgba(255,255,255,.3); color:#fff;" data-action="sp-open-historial" title="Mis Planillas" aria-label="Ver mis planillas">${icon('book','icon-sm')}</button>
+        </div>
       </div>
 
       ${c? `
@@ -912,10 +992,118 @@ function renderStudentPortalPage(){
           }).join('')}
         </div>
       </div>
-    </main>
-  </div>
-  ${ui.modal? renderModal() : ''}
-  ${ui.confirm? renderConfirmModal() : ''}
+  `;
+}
+
+/* ---------------------------- Registro Diario: form mobile-first (Panel del Alumno) ---------------------------- */
+function renderRegistroDiarioForm(){
+  if(!RD) return `<div class="empty-state"><span class="spinner spinner-accent"></span> Cargando planilla…</div>`;
+  const locked = !['borrador','corregida'].includes(RD.estado);
+  const secciones = RD._secciones || [];
+  const actividades = RD.actividades && RD.actividades.length ? RD.actividades : [];
+
+  return `
+      <div class="page-head">
+        <div><h1 class="page-title">Planilla diaria</h1><p class="page-sub">${registroEstadoBadge(RD.estado)} <span id="rd-save-status" style="margin-left:8px; color:var(--text-3);"></span></p></div>
+      </div>
+
+      ${RD.estado==='corregida' && RD.observacionesDocente? `
+      <div class="card" style="border-color:var(--red-soft); background:var(--red-soft); margin-bottom:16px;">
+        <div style="display:flex; gap:10px; align-items:flex-start;">
+          <span style="color:var(--red-2); flex-shrink:0;">${icon('alertTriangle','icon-sm')}</span>
+          <div><div style="font-weight:700; font-size:13px; color:var(--red-2); margin-bottom:3px;">El docente pidió una corrección</div><div style="font-size:13px; color:var(--red-2);">${esc(RD.observacionesDocente)}</div></div>
+        </div>
+      </div>` : ''}
+      ${RD.estado==='aprobada'? `
+      <div class="card" style="border-color:var(--green-soft); background:var(--green-soft); margin-bottom:16px;">
+        <div style="display:flex; gap:10px; align-items:center;"><span style="color:var(--green-2);">${icon('checkCircle','icon-sm')}</span><div style="font-weight:700; font-size:13px; color:var(--green-2);">Planilla aprobada por el docente</div></div>
+        ${RD.observacionesDocente? `<p style="font-size:12.5px; color:var(--text-2); margin-top:6px;">${esc(RD.observacionesDocente)}</p>`:''}
+      </div>` : ''}
+      ${RD.estado==='enviada'? `
+      <div class="card" style="border-color:var(--amber-soft); background:var(--amber-soft); margin-bottom:16px;">
+        <div style="display:flex; gap:10px; align-items:center;"><span style="color:var(--amber-2);">${icon('clock','icon-sm')}</span><div style="font-weight:700; font-size:13px; color:var(--amber-2);">Enviada, esperando revisión del docente</div></div>
+      </div>` : ''}
+
+      <div class="section-card">
+        <div class="field-row">
+          <div class="field"><label for="rd-fecha">Fecha</label><input class="input" type="date" id="rd-fecha" value="${RD.fecha}" ${locked?'disabled':''}></div>
+          <div class="field"><label>Alumno</label><input class="input" value="${esc(SP.student.nombre)} ${esc(SP.student.apellido)}" disabled></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Grupo</label><input class="input" value="${esc(RD._sugerido&&RD._sugerido.grupo || '—')}" disabled></div>
+          <div class="field"><label for="rd-seccion">Entorno Productivo</label>
+            <select class="select rd-autosave" id="rd-seccion" data-field="sectionId" style="width:100%;" ${locked?'disabled':''}>
+              <option value="">Seleccioná…</option>
+              ${secciones.map(s=>`<option value="${s.id}" ${RD.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field"><label for="rd-mep">MEP</label><input class="input rd-autosave" id="rd-mep" data-field="mep" value="${esc(RD.mep||'')}" placeholder="Módulo / referente MEP" ${locked?'disabled':''}></div>
+      </div>
+
+      <div id="rd-actividades-wrap">
+        ${actividades.map((a,i)=>renderActividadCard(a,i,locked)).join('')}
+      </div>
+      ${!locked? `<button class="btn" style="width:100%; justify-content:center; margin-bottom:16px;" data-action="rd-add-actividad">${icon('plus','icon-sm')} Agregar otra actividad</button>` : ''}
+
+      <div class="section-card">
+        <h3>Datos</h3>
+        <p class="cell-muted" style="font-size:12px; margin-bottom:8px;">Cantidad de madres, lechones, producción, pesos u otros datos relevantes.</p>
+        <textarea class="input rd-autosave" id="rd-datos" data-field="datos" style="min-height:100px;" placeholder="Registrá acá los datos de la jornada…" ${locked?'disabled':''}>${esc(RD.datos||'')}</textarea>
+      </div>
+
+      <div class="section-card">
+        <h3>Normas de Higiene y Seguridad</h3>
+        <textarea class="input rd-autosave" id="rd-higiene" data-field="higieneSeguridad" style="min-height:90px;" placeholder="Observaciones sobre higiene y seguridad…" ${locked?'disabled':''}>${esc(RD.higieneSeguridad||'')}</textarea>
+      </div>
+
+      <div class="section-card">
+        <h3>Normas BPA</h3>
+        <textarea class="input rd-autosave" id="rd-bpa" data-field="bpa" style="min-height:90px;" placeholder="Observaciones sobre buenas prácticas agropecuarias…" ${locked?'disabled':''}>${esc(RD.bpa||'')}</textarea>
+      </div>
+
+      ${!locked? `<button class="btn btn-primary" style="width:100%; justify-content:center; padding:14px;" data-action="rd-enviar">${icon('check','icon-sm')} Guardar Planilla</button>` : ''}
+  `;
+}
+function renderActividadCard(a,i,locked){
+  return `
+  <div class="section-card" style="border-left:3px solid var(--accent);">
+    <h3>Actividad ${i+1} ${!locked? `<button class="icon-btn btn-sm" style="margin-left:auto; color:var(--red);" data-action="rd-remove-actividad" data-aid="${a.id}" title="Quitar" aria-label="Quitar actividad">${icon('trash','icon-sm')}</button>`:''}</h3>
+    <div class="field"><label for="rd-act-${a.id}-actividad">Actividad</label><textarea class="input rd-autosave" id="rd-act-${a.id}-actividad" data-field="actividades.${a.id}.actividad" style="min-height:70px;" placeholder="¿Qué actividad realizaste?" ${locked?'disabled':''}>${esc(a.actividad||'')}</textarea></div>
+    <div class="field"><label for="rd-act-${a.id}-insumos">Insumos utilizados</label><textarea class="input rd-autosave" id="rd-act-${a.id}-insumos" data-field="actividades.${a.id}.insumos" style="min-height:60px;" ${locked?'disabled':''}>${esc(a.insumos||'')}</textarea></div>
+    <div class="field"><label for="rd-act-${a.id}-maquinas">Máquinas y herramientas</label><textarea class="input rd-autosave" id="rd-act-${a.id}-maquinas" data-field="actividades.${a.id}.maquinas" style="min-height:60px;" ${locked?'disabled':''}>${esc(a.maquinas||'')}</textarea></div>
+    <div class="field"><label for="rd-act-${a.id}-observaciones">Observaciones</label><textarea class="input rd-autosave" id="rd-act-${a.id}-observaciones" data-field="actividades.${a.id}.observaciones" style="min-height:60px;" ${locked?'disabled':''}>${esc(a.observaciones||'')}</textarea></div>
+    <div class="field">
+      <label>Evidencias fotográficas</label>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:${(a.fotos&&a.fotos.length)?'8px':'0'};">
+        ${(a.fotos||[]).map(f=>`<a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Evidencia fotográfica" style="width:64px; height:64px; object-fit:cover; border-radius:var(--r-sm); border:1px solid var(--border);"></a>`).join('')}
+      </div>
+      ${!locked? `
+      <label class="file-drop" for="rd-foto-${a.id}" style="display:flex; align-items:center; justify-content:center; gap:6px; padding:14px;">
+        ${icon('upload','icon-sm')} <span style="font-size:12.5px; font-weight:600;">Agregar foto</span>
+      </label>
+      <input type="file" id="rd-foto-${a.id}" accept="image/*" capture="environment" data-aid="${a.id}" class="rd-foto-input" style="display:none;">
+      `:''}
+    </div>
+  </div>`;
+}
+
+/* ---------------------------- Mis Planillas: historial (Panel del Alumno) ---------------------------- */
+function renderMisPlanillasHistorial(){
+  return `
+      <div class="page-head"><div><h1 class="page-title">Mis Planillas</h1><p class="page-sub">Historial de tus planillas diarias</p></div></div>
+      ${RD_LIST===null? `<div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>` :
+        (RD_LIST.length? RD_LIST.map(r=>`
+        <div class="card clickable" style="margin-bottom:12px; cursor:pointer;" data-action="sp-open-planilla-historial" data-fecha="${r.fecha}">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+            <div>
+              <div style="font-weight:700; font-size:14px;">${fmtDate(r.fecha)}</div>
+              <div class="cell-muted" style="font-size:12.5px; margin-top:2px;">${esc(r.sectionNombre||'Sin entorno productivo')}</div>
+            </div>
+            ${registroEstadoBadge(r.estado)}
+          </div>
+          <div class="cell-muted" style="font-size:12px; margin-top:8px;">${r.cantidadActividades} actividad${r.cantidadActividades===1?'':'es'} cargada${r.cantidadActividades===1?'':'s'}</div>
+        </div>`).join('') : `<div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Todavía no completaste ninguna planilla</div></div>`)}
   `;
 }
 
@@ -978,6 +1166,7 @@ function renderShell(){
         <div class="nav-section-label">Sistema</div>
         ${navItem('cronograma','calendar','Cronograma de Rotaciones', ['admin','coordinador','viewadmin'])}
         ${navItem('planillas','file','Planillas Digitales FAT', ['admin','seccion','viewadmin'])}
+        ${navItem('registros','edit','Planillas del Alumno', ['admin','seccion','coordinador','viewadmin'])}
         ${navItem('documentos','file','Centro de Documentos', ['admin','viewadmin'])}
         ${navItem('usuarios','users','Gestión de Usuarios', ['admin'])}
         ${navItem('config','sliders','Configuración', ['admin','viewadmin'])}
@@ -1050,6 +1239,8 @@ function renderView(){
     case 'cronograma': return (session.role==='admin'||session.role==='coordinador'||session.role==='viewadmin') ? renderCronograma() : renderDashboard();
     case 'planillas': return (session.role==='admin'||session.role==='seccion'||session.role==='viewadmin') ? renderPlanillas() : renderDashboard();
     case 'planilla-detalle': return renderPlanillaDetalle();
+    case 'registros': return (['admin','seccion','coordinador','viewadmin'].includes(session.role)) ? renderRegistrosAdmin() : renderDashboard();
+    case 'registro-detalle': return renderRegistroAdminDetalle();
     case 'documentos': return (session.role==='admin'||session.role==='viewadmin') ? renderDocumentos() : renderDashboard();
     case 'usuarios': return session.role==='admin' ? renderGestionUsuarios() : renderDashboard();
     case 'config': return (session.role==='admin'||session.role==='viewadmin') ? renderConfig() : renderDashboard();
@@ -2351,6 +2542,105 @@ function renderPlanillaForm(p){
   `;
 }
 
+/* ---------------------------- PLANILLAS DEL ALUMNO: revisión docente (registro diario) ---------------------------- */
+function renderRegistrosAdmin(){
+  if(!RD_ADMIN_LIST) return `<div class="page-head"><div><h1 class="page-title">Planillas del Alumno</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
+  const f = ui.rdFilters;
+  const cursos = [...new Set(DB.students.map(s=>s.curso))];
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">Planillas del Alumno</h1><p class="page-sub">${RD_ADMIN_LIST.length} planilla${RD_ADMIN_LIST.length===1?'':'s'} diaria${RD_ADMIN_LIST.length===1?'':'s'} · bitácora que completa cada alumno</p></div>
+  </div>
+  <div class="filters-row">
+    <select class="select" data-action="filter-rd-curso"><option value="">Todos los cursos</option>${cursos.map(c=>`<option value="${esc(c)}" ${f.curso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
+    <select class="select" data-action="filter-rd-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${f.groupId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
+    <select class="select" data-action="filter-rd-alumno"><option value="">Todos los alumnos</option>${DB.students.map(s=>`<option value="${s.id}" ${f.studentId===s.id?'selected':''}>${esc(s.nombre)} ${esc(s.apellido)}</option>`).join('')}</select>
+    <select class="select" data-action="filter-rd-seccion"><option value="">Todos los entornos</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+    <input class="input" type="date" data-action="filter-rd-fecha" value="${f.fecha||''}" title="Fecha">
+    <select class="select" data-action="filter-rd-estado"><option value="">Todos los estados</option>
+      <option value="borrador" ${f.estado==='borrador'?'selected':''}>Borrador</option>
+      <option value="enviada" ${f.estado==='enviada'?'selected':''}>Enviada</option>
+      <option value="corregida" ${f.estado==='corregida'?'selected':''}>Corregida</option>
+      <option value="aprobada" ${f.estado==='aprobada'?'selected':''}>Aprobada</option>
+    </select>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Alumno</th><th>Curso</th><th>Entorno Productivo</th><th>Fecha</th><th>Actividades</th><th>Estado</th></tr></thead>
+    <tbody>
+    ${RD_ADMIN_LIST.length? RD_ADMIN_LIST.map(r=>`
+      <tr class="clickable" data-action="open-registro-admin" data-id="${r.id}">
+        <td class="cell-strong">${esc(r.studentNombre)}</td>
+        <td>${esc(r.curso||'—')}</td>
+        <td>${esc(r.sectionNombre||'—')}</td>
+        <td class="cell-muted">${fmtDate(r.fecha)}</td>
+        <td>${r.cantidadActividades}</td>
+        <td>${registroEstadoBadge(r.estado)}</td>
+      </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin planillas todavía</div></div></td></tr>`}
+    </tbody>
+  </table>
+  </div>
+  `;
+}
+
+function renderRegistroAdminDetalle(){
+  const r = RD;
+  if(!r) return `<div class="empty-state">Cargando…</div>`;
+  const canRevisar = ['admin','seccion','coordinador'].includes(session.role) && ['enviada','corregida'].includes(r.estado);
+  const student = DB.students.find(s=>s.id===r.studentId);
+  return `
+  <div class="page-head">
+    <div>
+      <button class="btn btn-ghost btn-sm" data-action="back-registros" style="margin-bottom:8px;">← Volver a Planillas del Alumno</button>
+      <h1 class="page-title">${student? esc(student.nombre)+' '+esc(student.apellido) : esc(r.studentNombre||'')}</h1>
+      <p class="page-sub">${fmtDate(r.fecha)} · ${esc(r.sectionNombre||'Sin entorno productivo')} · ${registroEstadoBadge(r.estado)}</p>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <div class="kv">
+      <dt>MEP</dt><dd>${esc(r.mep||'—')}</dd>
+      <dt>Grupo</dt><dd>${(DB.groups||[]).find(g=>g.id===r.groupId)?.nombre || '—'}</dd>
+    </div>
+  </div>
+
+  ${(r.actividades||[]).map((a,i)=>`
+  <div class="section-card" style="border-left:3px solid var(--accent);">
+    <h3>Actividad ${i+1}</h3>
+    <p style="margin-bottom:6px;"><strong>Actividad:</strong> ${esc(a.actividad||'—')}</p>
+    <p style="margin-bottom:6px;"><strong>Insumos utilizados:</strong> ${esc(a.insumos||'—')}</p>
+    <p style="margin-bottom:6px;"><strong>Máquinas y herramientas:</strong> ${esc(a.maquinas||'—')}</p>
+    <p style="margin-bottom:6px;"><strong>Observaciones:</strong> ${esc(a.observaciones||'—')}</p>
+    ${(a.fotos&&a.fotos.length)? `<div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">${a.fotos.map(f=>`<a href="${f.url}" target="_blank" rel="noopener"><img src="${f.url}" alt="Evidencia fotográfica" style="width:84px; height:84px; object-fit:cover; border-radius:var(--r-sm); border:1px solid var(--border);"></a>`).join('')}</div>`:''}
+  </div>`).join('') || `<div class="empty-state" style="padding:20px;">Sin actividades cargadas.</div>`}
+
+  <div class="section-card">
+    <h3>Datos</h3>
+    <p class="planilla-doc-text">${esc(r.datos)||'—'}</p>
+  </div>
+  <div class="section-card">
+    <h3>Normas de Higiene y Seguridad</h3>
+    <p class="planilla-doc-text">${esc(r.higieneSeguridad)||'—'}</p>
+  </div>
+  <div class="section-card">
+    <h3>Normas BPA</h3>
+    <p class="planilla-doc-text">${esc(r.bpa)||'—'}</p>
+  </div>
+
+  <div class="section-card">
+    <h3>Revisión del docente</h3>
+    ${r.observacionesDocente? `<p class="cell-muted" style="font-size:12.5px; margin-bottom:10px;"><strong>Observación actual:</strong> ${esc(r.observacionesDocente)}</p>`:''}
+    ${canRevisar? `
+    <div class="field"><label for="rd-obs-docente">Observaciones para el alumno</label><textarea class="input" id="rd-obs-docente" style="min-height:90px;" placeholder="Comentarios o correcciones para el alumno...">${esc(r.observacionesDocente||'')}</textarea></div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn" style="flex:1; justify-content:center;" data-action="registro-revisar" data-estado="corregida" data-id="${r.id}">${icon('edit','icon-sm')} Enviar corrección</button>
+      <button class="btn btn-primary" style="flex:1; justify-content:center;" data-action="registro-revisar" data-estado="aprobada" data-id="${r.id}">${icon('check','icon-sm')} Aprobar planilla</button>
+    </div>
+    ` : `<p class="cell-muted" style="font-size:12.5px;">${r.estado==='borrador'?'El alumno todavía no envió esta planilla.':'Esta planilla ya fue revisada.'}</p>`}
+  </div>
+  `;
+}
+
 /* ---------------------------- GESTIÓN DE USUARIOS (admin: administra cuentas VIEW ADMIN) ---------------------------- */
 function renderGestionUsuarios(){
   if(!USUARIOS) return `<div class="page-head"><div><h1 class="page-title">Gestión de Usuarios</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
@@ -3025,6 +3315,17 @@ function attachGlobalEvents(){
       if(p) p[field] = t.value;
       autosavePlanilla({ [field]: t.value });
     }
+    if(t.classList && t.classList.contains('rd-autosave') && RD){
+      const field = t.getAttribute('data-field');
+      if(field.startsWith('actividades.')){
+        const [,aid,sub] = field.split('.');
+        const act = (RD.actividades||[]).find(a=>a.id===aid);
+        if(act){ act[sub] = t.value; autosaveRegistro({ actividades: RD.actividades }); }
+      } else {
+        RD[field] = t.value;
+        autosaveRegistro({ [field]: t.value });
+      }
+    }
   });
 
   app.addEventListener('click', async (e)=>{
@@ -3038,6 +3339,7 @@ function attachGlobalEvents(){
       try{ localStorage.setItem('fat_last_view', ui.view); }catch(e){}
       if(ui.view==='documentos' && !DOCS){ try{ await loadDocumentos(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los documentos','red'); } }
       if(ui.view==='planillas'){ try{ await Promise.all([loadPlanillas(), CRITERIOS?Promise.resolve():loadCriterios()]); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas','red'); } }
+      if(ui.view==='registros'){ try{ await loadRegistrosAdmin(); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas del alumno','red'); } }
       if(ui.view==='cronograma' && !PLANILLAS){ try{ ui.plnFilters={}; await loadPlanillas(); render(); }catch(e){ /* si falla, el cronograma sigue funcionando sin el indicador de asistencia */ } }
       if(ui.view==='config' && !CRITERIOS && session.role==='admin'){ try{ await loadCriterios(); render(); }catch(e){ /* no crítico */ } }
       if(ui.view==='usuarios'){ try{ await loadUsuarios(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los usuarios','red'); } }
@@ -3058,6 +3360,43 @@ function attachGlobalEvents(){
         await apiFetch('POST', '/api/mi-portal/respuesta', { rotationId, semana, leido, actividadRealizada, observacion, documentoId: documentoId||null });
         await loadStudentPortal(); render(); toast('Respuesta guardada');
       }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
+    }
+    else if(action==='sp-open-registro'){
+      ui.spView='registro'; RD=null; render();
+      loadRegistroDiario(ui.rdFecha).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
+    }
+    else if(action==='sp-open-historial'){
+      ui.spView='historial'; RD_LIST=null; render();
+      loadMisPlanillas().then(render).catch(e=> toast(e.message||'No se pudo cargar el historial','red'));
+    }
+    else if(action==='sp-open-planilla-historial'){
+      ui.rdFecha = t.getAttribute('data-fecha'); ui.spView='registro'; RD=null; render();
+      loadRegistroDiario(ui.rdFecha).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
+    }
+    else if(action==='sp-go-home'){ ui.spView='home'; render(); }
+    else if(action==='rd-add-actividad'){
+      if(!RD) return;
+      if(!RD.actividades) RD.actividades=[];
+      RD.actividades.push({ id: uid('act'), actividad:'', insumos:'', maquinas:'', observaciones:'', fotos:[] });
+      autosaveRegistro({ actividades: RD.actividades }); render();
+    }
+    else if(action==='rd-remove-actividad'){
+      if(!RD) return;
+      const aid = t.getAttribute('data-aid');
+      askConfirm({
+        title:'Quitar actividad', message:'¿Seguro que querés quitar esta actividad de la planilla?', confirmLabel:'Quitar', danger:true,
+        onConfirm: ()=>{ RD.actividades = (RD.actividades||[]).filter(a=>a.id!==aid); autosaveRegistro({ actividades: RD.actividades }); render(); }
+      });
+    }
+    else if(action==='rd-enviar'){
+      if(!RD) return;
+      clearTimeout(rdSaveTimer);
+      try{
+        await apiFetch('PUT', '/api/mi-portal/registros/'+RD.id, { sectionId:RD.sectionId, mep:RD.mep, actividades:RD.actividades, datos:RD.datos, higieneSeguridad:RD.higieneSeguridad, bpa:RD.bpa });
+        await apiFetch('POST', '/api/mi-portal/registros/'+RD.id+'/enviar', {});
+        await loadRegistroDiario(RD.fecha);
+        render(); toast('Planilla guardada correctamente');
+      }catch(e){ toast(e.message||'No se pudo guardar la planilla', 'red'); }
     }
     else if(action==='confirm-yes'){ const cb = ui.confirm && ui.confirm.onConfirm; ui.confirm=null; if(cb) await cb(); render(); }
     else if(action==='confirm-no'){ if(e.target===t){ ui.confirm=null; render(); } }
@@ -3276,6 +3615,23 @@ function attachGlobalEvents(){
         }
       });
     }
+    else if(action==='open-registro-admin'){
+      ui.view='registro-detalle'; RD=null; render();
+      try{ RD = await apiFetch('GET','/api/registros/'+id); render(); }
+      catch(e){ toast(e.message||'No se pudo cargar la planilla','red'); ui.view='registros'; render(); }
+    }
+    else if(action==='back-registros'){ ui.view='registros'; RD=null; render(); }
+    else if(action==='registro-revisar'){
+      const estado = t.getAttribute('data-estado');
+      const observacionesDocente = document.getElementById('rd-obs-docente').value.trim();
+      if(estado==='corregida' && !observacionesDocente){ toast('Escribí una observación para la corrección','red'); return; }
+      try{
+        await apiFetch('PUT','/api/registros/'+id+'/revisar', { estado, observacionesDocente });
+        await loadRegistrosAdmin();
+        RD = await apiFetch('GET','/api/registros/'+id);
+        render(); toast(estado==='aprobada'?'Planilla aprobada':'Corrección enviada al alumno');
+      }catch(e){ toast(e.message||'No se pudo actualizar', 'red'); }
+    }
     else if(action==='add-asistencia'){
       const fecha = document.getElementById('f-asis-fecha').value;
       const estado = document.getElementById('f-asis-estado').value;
@@ -3444,6 +3800,12 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="filter-pln-profesor"]')){ ui.plnFilters.teacherId = t.value; await loadPlanillas(); render(); }
     else if(t.matches('[data-action="filter-pln-desde"]')){ ui.plnFilters.desde = t.value; await loadPlanillas(); render(); }
     else if(t.matches('[data-action="filter-pln-hasta"]')){ ui.plnFilters.hasta = t.value; await loadPlanillas(); render(); }
+    else if(t.matches('[data-action="filter-rd-curso"]')){ ui.rdFilters.curso = t.value; await loadRegistrosAdmin(); render(); }
+    else if(t.matches('[data-action="filter-rd-grupo"]')){ ui.rdFilters.groupId = t.value; await loadRegistrosAdmin(); render(); }
+    else if(t.matches('[data-action="filter-rd-alumno"]')){ ui.rdFilters.studentId = t.value; await loadRegistrosAdmin(); render(); }
+    else if(t.matches('[data-action="filter-rd-seccion"]')){ ui.rdFilters.sectionId = t.value; await loadRegistrosAdmin(); render(); }
+    else if(t.matches('[data-action="filter-rd-fecha"]')){ ui.rdFilters.fecha = t.value; await loadRegistrosAdmin(); render(); }
+    else if(t.matches('[data-action="filter-rd-estado"]')){ ui.rdFilters.estado = t.value; await loadRegistrosAdmin(); render(); }
     else if(t.matches('[data-action="cron-filtro-grupo"]')){ ui.cronFiltroGrupo = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-seccion"]')){ ui.cronFiltroSeccion = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-curso"]')){ ui.cronFiltroCurso = t.value; render(); }
@@ -3455,6 +3817,25 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="pendiente-estado"]')){
       const id = t.getAttribute('data-id'); const estado = t.value;
       apiFetch('PUT', '/api/pendientes/'+id, { estado }).then(async ()=>{ await loadDB(['pendientes']); render(); toast('Estado actualizado'); }).catch(e=> toast(e.message||'No se pudo actualizar', 'red'));
+    }
+    else if(t.id==='rd-fecha'){
+      ui.rdFecha = t.value; RD=null; render();
+      loadRegistroDiario(ui.rdFecha).then(render).catch(e=> toast(e.message||'No se pudo cargar la planilla de esa fecha','red'));
+    }
+    else if(t.classList && t.classList.contains('rd-foto-input')){
+      const aid = t.getAttribute('data-aid');
+      const file = t.files && t.files[0];
+      if(!file || !RD) return;
+      const fd = new FormData(); fd.append('file', file);
+      try{
+        toast('Subiendo foto…');
+        const res = await fetch(API_BASE+'/api/mi-portal/registros/'+RD.id+'/foto', { method:'POST', headers:{ Authorization:'Bearer '+authToken }, body:fd });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error||'No se pudo subir la foto');
+        const act = (RD.actividades||[]).find(a=>a.id===aid);
+        if(act){ if(!act.fotos) act.fotos=[]; act.fotos.push({ url:data.url, publicId:data.publicId, nombre:data.nombre }); autosaveRegistro({ actividades: RD.actividades }); }
+        render(); toast('Foto agregada');
+      }catch(e){ toast(e.message||'No se pudo subir la foto', 'red'); }
     }
     else if(t.id==='f-doc-file'){
       const f = t.files && t.files[0];
