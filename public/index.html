@@ -384,8 +384,8 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 .planilla-doc-text{font-size:13.5px; line-height:1.7; white-space:pre-wrap;}
 @media print{
   body *{visibility:hidden;}
-  #planilla-print-area, #planilla-print-area *{visibility:visible;}
-  #planilla-print-area{position:absolute; left:0; top:0; width:100%; box-shadow:none; border:none; max-width:none;}
+  #planilla-print-area, #planilla-print-area *, #registro-print-area, #registro-print-area *{visibility:visible;}
+  #planilla-print-area, #registro-print-area{position:absolute; left:0; top:0; width:100%; box-shadow:none; border:none; max-width:none;}
   .no-print, .sidebar, .topbar, .sidebar-scrim{display:none !important;}
 }
 .cron-legend-item{display:flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; padding:6px 12px; border-radius:var(--r-pill); border:1px solid var(--border); background:var(--surface); cursor:default; transition:box-shadow .15s var(--ease);}
@@ -454,6 +454,9 @@ let planillaViewMode = 'documento'; // 'documento' (estilo Word, solo lectura) |
 let RD = null; // Registro Diario (Panel del Alumno): planilla del día abierta actualmente
 let RD_LIST = null; // "Mis Planillas": historial del alumno
 let RD_ADMIN_LIST = null; // listado de registros diarios para el Panel del Docente
+let RD_TRASH = null; // papelera de registros diarios (solo admin)
+let RD_SUGERIDO_TMP = null; // datos sugeridos mientras el alumno elige el modo (formulario vs archivo), antes de crear el registro
+let NOTIFICACIONES = null; // notificaciones del alumno (aprobación/rechazo/corrección)
 let rdSaveTimer = null;
 let session = null;
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
@@ -461,7 +464,7 @@ let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, m
   page:{ students:1, rotations:1, documentosAlumno:1 },
   sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
   cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7), cronogramaTab:'semanal',
-  spView:'home', rdFecha:todayISO(), rdFilters:{}, rdSort:{key:'fecha',dir:'desc'} };
+  spView:'home', rdFecha:todayISO(), rdFilters:{}, rdSort:{key:'fecha',dir:'desc'}, spNotifOpen:false, rdSelected:{}, rdShowTrash:false };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -470,6 +473,12 @@ function addDays(iso,n){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate(
 function fmtDate(iso){ if(!iso) return '—'; const d=new Date(iso+'T00:00:00'); return d.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'}); }
 function daysBetween(a,b){ return Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000); }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtBytes(n){
+  if(n==null) return '';
+  if(n<1024) return n+' B';
+  if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
+  return (n/(1024*1024)).toFixed(1)+' MB';
+}
 function formatFileSize(bytes){
   if(bytes==null) return '';
   if(bytes<1024) return bytes+' B';
@@ -577,6 +586,7 @@ async function loadDB(only){
 }
 async function loadStudentPortal(){
   SP = await apiFetch('GET', '/api/mi-portal');
+  loadNotificaciones().then(render).catch(()=>{}); // liviano y no bloqueante: no retrasa el login
 }
 async function loadDocumentos(){
   const data = await apiFetch('GET', '/api/documentos');
@@ -617,20 +627,38 @@ async function loadPlanillaDetalle(id){
 function getPlanilla(id){ return (PLANILLAS||[]).find(p=>p.id===id); }
 
 /* ---------------------------- REGISTRO DIARIO (Planilla del alumno / Panel del Docente) ---------------------------- */
-async function loadRegistroDiario(fecha){
+// Si ya existe una planilla para esa fecha, la abre directo (en el modo que ya eligió el alumno).
+// Si no existe, guarda los datos sugeridos y pasa a la pantalla de "elegir modo" (formulario vs subir archivo).
+async function openRegistroDiario(fecha){
   const data = await apiFetch('GET', '/api/mi-portal/registros?fecha='+encodeURIComponent(fecha));
-  let reg = data.registro;
-  if(!reg){
-    const created = await apiFetch('POST', '/api/mi-portal/registros', { fecha, sectionId: data.sugerido.sectionId, mep:'' });
-    reg = await apiFetch('GET', '/api/mi-portal/registros/'+created.id);
+  if(data.registro){
+    const reg = await apiFetch('GET', '/api/mi-portal/registros/'+data.registro.id);
+    reg._secciones = data.secciones; reg._sugerido = data.sugerido;
+    RD = reg;
+    ui.spView = RD.modo==='archivo' ? 'archivo-upload' : 'registro';
+  } else {
+    RD_SUGERIDO_TMP = { secciones: data.secciones, sugerido: data.sugerido, fecha };
+    ui.spView = 'elegir-modo';
   }
-  reg._secciones = data.secciones;
-  reg._sugerido = data.sugerido;
+}
+async function crearRegistroConModo(modo){
+  const { fecha, sugerido, secciones } = RD_SUGERIDO_TMP;
+  const created = await apiFetch('POST', '/api/mi-portal/registros', { fecha, sectionId: sugerido.sectionId, mep:'', modo });
+  const reg = await apiFetch('GET', '/api/mi-portal/registros/'+created.id);
+  reg._secciones = secciones; reg._sugerido = sugerido;
   RD = reg;
+  ui.spView = modo==='archivo' ? 'archivo-upload' : 'registro';
 }
 async function loadMisPlanillas(){
   const data = await apiFetch('GET', '/api/mi-portal/registros');
   RD_LIST = data.registros;
+}
+async function loadNotificaciones(){
+  const data = await apiFetch('GET', '/api/mi-portal/notificaciones');
+  NOTIFICACIONES = data.notificaciones;
+}
+async function marcarNotifLeida(id){
+  try{ await apiFetch('POST', '/api/mi-portal/notificaciones/'+id+'/leida', {}); const n=(NOTIFICACIONES||[]).find(x=>x.id===id); if(n) n.leida=true; render(); }catch(e){}
 }
 function autosaveRegistro(partial){
   const statusEl = document.getElementById('rd-save-status');
@@ -660,8 +688,69 @@ async function loadRegistrosAdmin(){
   const data = await apiFetch('GET', '/api/registros'+(qs?'?'+qs:''));
   RD_ADMIN_LIST = data.registros;
 }
+async function loadRegistrosTrash(){
+  const data = await apiFetch('GET', '/api/registros?papelera=1');
+  RD_TRASH = data.registros;
+}
+async function exportRegistroPDF(r){
+  try{ await loadJsPDF(); }catch(e){ toast('No se pudo cargar el generador de PDF','red'); return; }
+  if(!window.jspdf){ toast('No se pudo generar el PDF','red'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let y = 18;
+  const student = DB.students.find(s=>s.id===r.studentId);
+  const nombre = student? student.nombre+' '+student.apellido : (r.studentNombre||'Alumno');
+  doc.setFontSize(16); doc.text('Planilla diaria — '+nombre, 14, y); y+=8;
+  doc.setFontSize(10); doc.text('Fecha: '+fmtDate(r.fecha)+'   Entorno: '+(r.sectionNombre||'-')+'   Estado: '+r.estado, 14, y); y+=6;
+  doc.text('MEP: '+(r.mep||'-'), 14, y); y+=10;
+  if(r.modo==='archivo'){
+    doc.setFontSize(11); doc.text('Planilla subida como archivo adjunto: '+(r.archivoAdjunto?r.archivoAdjunto.nombre:'(sin archivo)'), 14, y); y+=8;
+  } else {
+    (r.actividades||[]).forEach((a,i)=>{
+      if(y>260){ doc.addPage(); y=18; }
+      doc.setFontSize(12); doc.text('Actividad '+(i+1), 14, y); y+=6;
+      doc.setFontSize(9);
+      [['Actividad',a.actividad],['Insumos',a.insumos],['Máquinas y herramientas',a.maquinas],['Observaciones',a.observaciones]].forEach(([label,val])=>{
+        const wrapped = doc.splitTextToSize(label+': '+(val||'-'), 180);
+        wrapped.forEach(w=>{ if(y>270){ doc.addPage(); y=18; } doc.text(w,14,y); y+=5; });
+      });
+      y+=4;
+    });
+    if(y>250){ doc.addPage(); y=18; }
+    doc.setFontSize(11); doc.text('Datos: '+(r.datos||'-'), 14, y); y+=8;
+    doc.text('Higiene y Seguridad: '+(r.higieneSeguridad||'-'), 14, y); y+=8;
+    doc.text('BPA: '+(r.bpa||'-'), 14, y); y+=8;
+  }
+  if(r.observacionesDocente){ y+=4; doc.setFontSize(10); doc.text('Observación del docente: '+r.observacionesDocente, 14, y); }
+  doc.save('Planilla_'+nombre.replace(/\s+/g,'_')+'_'+r.fecha+'.pdf');
+}
+async function exportRegistrosBulkPDF(){
+  const ids = Object.keys(ui.rdSelected||{}).filter(id=>ui.rdSelected[id]);
+  if(!ids.length) return;
+  try{ await loadJsPDF(); }catch(e){ toast('No se pudo cargar el generador de PDF','red'); return; }
+  if(!window.jspdf){ toast('No se pudo generar el PDF','red'); return; }
+  toast('Generando PDF de '+ids.length+' planilla'+(ids.length===1?'':'s')+'…');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  for(let idx=0; idx<ids.length; idx++){
+    const r = await apiFetch('GET', '/api/registros/'+ids[idx]);
+    if(idx>0) doc.addPage();
+    let y=18;
+    doc.setFontSize(16); doc.text('Planilla diaria — '+r.studentNombre, 14, y); y+=8;
+    doc.setFontSize(10); doc.text('Fecha: '+fmtDate(r.fecha)+'   Entorno: '+(r.sectionNombre||'-')+'   Estado: '+r.estado, 14, y); y+=10;
+    if(r.modo==='archivo'){
+      doc.setFontSize(11); doc.text('Planilla subida como archivo: '+(r.archivoAdjunto?r.archivoAdjunto.nombre:'(sin archivo)'), 14, y);
+    } else {
+      (r.actividades||[]).forEach((a,i)=>{
+        if(y>260){ doc.addPage(); y=18; }
+        doc.setFontSize(11); doc.text('Actividad '+(i+1)+': '+(a.actividad||'-'), 14, y); y+=6;
+      });
+    }
+  }
+  doc.save('Planillas_diarias_'+todayISO()+'.pdf');
+}
 function registroEstadoBadge(estado){
-  const map = {borrador:['neutral','Borrador'], enviada:['amber','Enviada'], corregida:['red','Corregida'], aprobada:['green','Aprobada']};
+  const map = {borrador:['neutral','Borrador'], enviada:['amber','Enviada'], en_revision:['accent','En revisión'], corregida:['red','Corregida'], aprobada:['green','Aprobada'], rechazada:['red','Rechazada']};
   const [c,l] = map[estado]||['neutral',estado];
   return `<span class="badge badge-${c}"><span class="badge-dot-ico"></span>${l}</span>`;
 }
@@ -875,6 +964,7 @@ function renderConfirmModal(){
    ========================================================================= */
 function renderStudentPortalPage(){
   if(!SP) return `<div class="login-wrap"><p style="color:var(--text-3);">Cargando…</p></div>`;
+  const unread = (NOTIFICACIONES||[]).filter(n=>!n.leida).length;
   return `
   <div style="min-height:100vh; background:var(--bg);">
     <div class="topbar" style="position:sticky; top:0;">
@@ -885,11 +975,13 @@ function renderStudentPortalPage(){
       </div>`}
       <div class="topbar-spacer"></div>
       <span class="cell-muted" style="font-size:13px; margin-right:10px;">${esc(SP.student.nombre)} ${esc(SP.student.apellido)}</span>
+      <button class="icon-btn" data-action="sp-toggle-notif" title="Notificaciones" aria-label="Notificaciones">${icon('bell','icon-sm')}${unread? `<span class="badge-dot">${unread>9?'9+':unread}</span>`:''}</button>
       <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema" aria-label="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
       <button class="btn btn-sm" data-action="logout" aria-label="Cerrar sesión">${icon('logout','icon-sm')} Salir</button>
     </div>
+    ${ui.spNotifOpen? renderSPNotifPanel() : ''}
     <main class="content" style="max-width:760px; margin:0 auto;">
-      ${ui.spView==='registro'? renderRegistroDiarioForm() : ui.spView==='historial'? renderMisPlanillasHistorial() : renderSPHome()}
+      ${ui.spView==='elegir-modo'? renderElegirModo() : ui.spView==='archivo-upload'? renderArchivoUpload() : ui.spView==='registro'? renderRegistroDiarioForm() : ui.spView==='historial'? renderMisPlanillasHistorial() : renderSPHome()}
     </main>
   </div>
   ${ui.modal? renderModal() : ''}
@@ -1023,6 +1115,15 @@ function renderRegistroDiarioForm(){
       <div class="card" style="border-color:var(--amber-soft); background:var(--amber-soft); margin-bottom:16px;">
         <div style="display:flex; gap:10px; align-items:center;"><span style="color:var(--amber-2);">${icon('clock','icon-sm')}</span><div style="font-weight:700; font-size:13px; color:var(--amber-2);">Enviada, esperando revisión del docente</div></div>
       </div>` : ''}
+      ${RD.estado==='en_revision'? `
+      <div class="card" style="border-color:var(--accent-soft); background:var(--accent-softer); margin-bottom:16px;">
+        <div style="display:flex; gap:10px; align-items:center;"><span style="color:var(--accent-2);">${icon('clock','icon-sm')}</span><div style="font-weight:700; font-size:13px; color:var(--accent-2);">El docente la está revisando en este momento</div></div>
+      </div>` : ''}
+      ${RD.estado==='rechazada'? `
+      <div class="card" style="border-color:var(--red-soft); background:var(--red-soft); margin-bottom:16px;">
+        <div style="display:flex; gap:10px; align-items:center;"><span style="color:var(--red-2);">${icon('xCircle','icon-sm')}</span><div style="font-weight:700; font-size:13px; color:var(--red-2);">Planilla rechazada</div></div>
+        ${RD.observacionesDocente? `<p style="font-size:12.5px; color:var(--red-2); margin-top:6px;">${esc(RD.observacionesDocente)}</p>`:''}
+      </div>` : ''}
 
       <div class="section-card">
         <div class="field-row">
@@ -1102,8 +1203,103 @@ function renderMisPlanillasHistorial(){
             </div>
             ${registroEstadoBadge(r.estado)}
           </div>
-          <div class="cell-muted" style="font-size:12px; margin-top:8px;">${r.cantidadActividades} actividad${r.cantidadActividades===1?'':'es'} cargada${r.cantidadActividades===1?'':'s'}</div>
+          <div class="cell-muted" style="font-size:12px; margin-top:8px;">${r.modo==='archivo'? 'Planilla subida como archivo' : r.cantidadActividades+' actividad'+(r.cantidadActividades===1?'':'es')+' cargada'+(r.cantidadActividades===1?'':'s')}</div>
         </div>`).join('') : `<div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Todavía no completaste ninguna planilla</div></div>`)}
+  `;
+}
+
+/* ---------------------------- Notificaciones (Panel del Alumno) ---------------------------- */
+function renderSPNotifPanel(){
+  return `
+  <div style="position:absolute; right:16px; top:58px; width:320px; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow-lg); z-index:30; max-height:400px; overflow-y:auto;">
+    <div style="padding:12px 14px; border-bottom:1px solid var(--border); font-weight:700; font-size:13px;">Notificaciones</div>
+    ${NOTIFICACIONES===null? `<div style="padding:20px; text-align:center;"><span class="spinner spinner-accent"></span></div>` :
+      (NOTIFICACIONES.length? NOTIFICACIONES.map(n=>`
+      <div class="notif-item" style="cursor:pointer; ${n.leida?'':'background:var(--accent-softer);'}" data-action="sp-notif-click" data-id="${n.id}">
+        <div class="notif-ico" style="background:var(--${n.tipo==='aprobada'?'green':n.tipo==='rechazada'?'red':'amber'}-soft); color:var(--${n.tipo==='aprobada'?'green-2':n.tipo==='rechazada'?'red-2':'amber-2'});">${icon(n.tipo==='aprobada'?'checkCircle':n.tipo==='rechazada'?'xCircle':'alertTriangle','icon-sm')}</div>
+        <div class="notif-text"><div class="notif-title">${esc(n.mensaje)}</div><div class="notif-sub">${fmtRelative(n.fecha)}</div></div>
+      </div>`).join('') : `<div class="empty-state" style="padding:24px;"><div class="em-icon">${icon('bell')}</div><div class="em-title">Sin notificaciones</div></div>`)}
+  </div>`;
+}
+
+/* ---------------------------- Elegir modo: formulario vs subir planilla ya hecha ---------------------------- */
+function renderElegirModo(){
+  return `
+      <div class="page-head"><div><h1 class="page-title">Planilla diaria</h1><p class="page-sub">${fmtDate(RD_SUGERIDO_TMP? RD_SUGERIDO_TMP.fecha : todayISO())} · ¿Cómo querés completarla?</p></div></div>
+
+      <div class="card clickable" style="margin-bottom:14px; cursor:pointer;" data-action="sp-elegir-modo" data-modo="formulario">
+        <div style="display:flex; align-items:center; gap:14px;">
+          <div style="width:44px; height:44px; border-radius:12px; background:var(--accent-softer); color:var(--accent-2); display:flex; align-items:center; justify-content:center; flex-shrink:0;">${icon('edit','icon-lg')}</div>
+          <div style="flex:1;">
+            <div style="font-weight:700; font-size:14.5px;">Completar en la aplicación</div>
+            <div class="cell-muted" style="font-size:12.5px; margin-top:2px;">Cargá actividades, fotos y observaciones paso a paso</div>
+          </div>
+          ${icon('chevronRight','icon-sm')}
+        </div>
+      </div>
+
+      <div class="card clickable" style="cursor:pointer;" data-action="sp-elegir-modo" data-modo="archivo">
+        <div style="display:flex; align-items:center; gap:14px;">
+          <div style="width:44px; height:44px; border-radius:12px; background:var(--green-soft); color:var(--green-2); display:flex; align-items:center; justify-content:center; flex-shrink:0;">${icon('upload','icon-lg')}</div>
+          <div style="flex:1;">
+            <div style="font-weight:700; font-size:14.5px;">Subir una planilla ya realizada</div>
+            <div class="cell-muted" style="font-size:12.5px; margin-top:2px;">Adjuntá un archivo PDF, Word o una foto/imagen</div>
+          </div>
+          ${icon('chevronRight','icon-sm')}
+        </div>
+      </div>
+  `;
+}
+
+/* ---------------------------- Subir planilla como archivo (alternativa al formulario) ---------------------------- */
+function renderArchivoUpload(){
+  if(!RD) return `<div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
+  const locked = !['borrador','corregida'].includes(RD.estado);
+  const a = RD.archivoAdjunto;
+  return `
+      <div class="page-head">
+        <div><h1 class="page-title">Planilla diaria</h1><p class="page-sub">${fmtDate(RD.fecha)} · ${registroEstadoBadge(RD.estado)}</p></div>
+      </div>
+
+      ${RD.estado==='corregida' && RD.observacionesDocente? `
+      <div class="card" style="border-color:var(--red-soft); background:var(--red-soft); margin-bottom:16px;">
+        <div style="display:flex; gap:10px; align-items:flex-start;">
+          <span style="color:var(--red-2); flex-shrink:0;">${icon('alertTriangle','icon-sm')}</span>
+          <div><div style="font-weight:700; font-size:13px; color:var(--red-2); margin-bottom:3px;">El docente pidió una corrección</div><div style="font-size:13px; color:var(--red-2);">${esc(RD.observacionesDocente)}</div></div>
+        </div>
+      </div>` : ''}
+      ${RD.estado==='aprobada'? `<div class="card" style="border-color:var(--green-soft); background:var(--green-soft); margin-bottom:16px;"><div style="display:flex; gap:10px; align-items:center;"><span style="color:var(--green-2);">${icon('checkCircle','icon-sm')}</span><div style="font-weight:700; font-size:13px; color:var(--green-2);">Planilla aprobada por el docente</div></div></div>` : ''}
+      ${RD.estado==='rechazada'? `<div class="card" style="border-color:var(--red-soft); background:var(--red-soft); margin-bottom:16px;"><div style="display:flex; gap:10px; align-items:center;"><span style="color:var(--red-2);">${icon('xCircle','icon-sm')}</span><div style="font-weight:700; font-size:13px; color:var(--red-2);">Planilla rechazada</div></div>${RD.observacionesDocente?`<p style="font-size:12.5px; color:var(--red-2); margin-top:6px;">${esc(RD.observacionesDocente)}</p>`:''}</div>` : ''}
+
+      <div class="section-card">
+        <h3>Tu planilla</h3>
+        ${!a? `
+          <label class="file-drop" for="rd-archivo-input" style="display:flex; flex-direction:column; align-items:center; gap:6px; padding:34px 16px;">
+            ${icon('upload','icon-lg')}
+            <div style="font-weight:650; font-size:13.5px;">Hacé clic para subir tu planilla</div>
+            <div style="font-size:11.5px; color:var(--text-3);">PDF, Word (.doc / .docx), JPG o PNG</div>
+          </label>
+          <input type="file" id="rd-archivo-input" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style="display:none;" ${locked?'disabled':''}>
+          <div id="rd-archivo-status" style="margin-top:9px; font-size:12.5px; color:var(--text-3);"></div>
+          <div id="rd-archivo-progress-wrap" style="display:none; margin-top:9px;"><div class="bar-track"><div class="bar-fill" id="rd-archivo-progress-bar" style="width:0%;"></div></div></div>
+        ` : `
+          <div class="file-chip" style="font-size:13px; padding:9px 14px;">${icon(a.tipo==='imagen'?'file':'paperclip','icon-sm')} ${esc(a.nombre)} <span class="cell-muted">· ${fmtBytes(a.tamano)}</span></div>
+          <div style="display:flex; gap:8px; margin-top:12px;">
+            <a class="btn btn-sm" style="flex:1; justify-content:center;" href="${a.url}" target="_blank" rel="noopener">${icon('checkCircle','icon-sm')} Ver archivo</a>
+            ${!locked? `<button class="btn btn-sm btn-danger" style="flex:1; justify-content:center;" data-action="rd-archivo-eliminar">${icon('trash','icon-sm')} Quitar</button>`:''}
+          </div>
+          ${!locked? `
+          <label class="file-drop" for="rd-archivo-input" style="display:block; text-align:center; margin-top:10px; padding:12px;">
+            <span style="font-size:12.5px; font-weight:600;">Reemplazar archivo</span>
+          </label>
+          <input type="file" id="rd-archivo-input" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style="display:none;">
+          <div id="rd-archivo-status" style="margin-top:9px; font-size:12.5px; color:var(--text-3);"></div>
+          <div id="rd-archivo-progress-wrap" style="display:none; margin-top:9px;"><div class="bar-track"><div class="bar-fill" id="rd-archivo-progress-bar" style="width:0%;"></div></div></div>
+          `:''}
+        `}
+      </div>
+
+      ${!locked? `<button class="btn btn-primary" style="width:100%; justify-content:center; padding:14px;" data-action="rd-enviar" ${!a?'disabled':''}>${icon('check','icon-sm')} Guardar Planilla</button>`:''}
   `;
 }
 
@@ -2544,13 +2740,21 @@ function renderPlanillaForm(p){
 
 /* ---------------------------- PLANILLAS DEL ALUMNO: revisión docente (registro diario) ---------------------------- */
 function renderRegistrosAdmin(){
-  if(!RD_ADMIN_LIST) return `<div class="page-head"><div><h1 class="page-title">Planillas del Alumno</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
+  const list = ui.rdShowTrash ? RD_TRASH : RD_ADMIN_LIST;
+  if(!list) return `<div class="page-head"><div><h1 class="page-title">Planillas del Alumno</h1></div></div><div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
   const f = ui.rdFilters;
   const cursos = [...new Set(DB.students.map(s=>s.curso))];
+  const isAdmin = session.role==='admin';
+  const selectedIds = Object.keys(ui.rdSelected||{}).filter(id=>ui.rdSelected[id]);
   return `
   <div class="page-head">
-    <div><h1 class="page-title">Planillas del Alumno</h1><p class="page-sub">${RD_ADMIN_LIST.length} planilla${RD_ADMIN_LIST.length===1?'':'s'} diaria${RD_ADMIN_LIST.length===1?'':'s'} · bitácora que completa cada alumno</p></div>
+    <div><h1 class="page-title">${ui.rdShowTrash?'Papelera de Planillas':'Planillas del Alumno'}</h1><p class="page-sub">${list.length} planilla${list.length===1?'':'s'}${ui.rdShowTrash?' eliminada'+(list.length===1?'':'s')+' · se pueden restaurar durante 30 días' : ' diaria'+(list.length===1?'':'s')+' · bitácora que completa cada alumno'}</p></div>
+    <div style="display:flex; gap:8px;">
+      ${selectedIds.length? `<button class="btn btn-primary btn-sm" data-action="rd-export-bulk-pdf">${icon('download','icon-sm')} Exportar PDF (${selectedIds.length})</button>`:''}
+      ${isAdmin? `<button class="btn btn-sm" data-action="rd-toggle-trash">${icon(ui.rdShowTrash?'arrowLeft':'trash','icon-sm')} ${ui.rdShowTrash?'Volver al listado':'Papelera'}</button>`:''}
+    </div>
   </div>
+  ${!ui.rdShowTrash? `
   <div class="filters-row">
     <select class="select" data-action="filter-rd-curso"><option value="">Todos los cursos</option>${cursos.map(c=>`<option value="${esc(c)}" ${f.curso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
     <select class="select" data-action="filter-rd-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${f.groupId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
@@ -2560,23 +2764,27 @@ function renderRegistrosAdmin(){
     <select class="select" data-action="filter-rd-estado"><option value="">Todos los estados</option>
       <option value="borrador" ${f.estado==='borrador'?'selected':''}>Borrador</option>
       <option value="enviada" ${f.estado==='enviada'?'selected':''}>Enviada</option>
+      <option value="en_revision" ${f.estado==='en_revision'?'selected':''}>En revisión</option>
       <option value="corregida" ${f.estado==='corregida'?'selected':''}>Corregida</option>
       <option value="aprobada" ${f.estado==='aprobada'?'selected':''}>Aprobada</option>
+      <option value="rechazada" ${f.estado==='rechazada'?'selected':''}>Rechazada</option>
     </select>
-  </div>
+  </div>`:''}
   <div class="table-wrap">
   <table>
-    <thead><tr><th>Alumno</th><th>Curso</th><th>Entorno Productivo</th><th>Fecha</th><th>Actividades</th><th>Estado</th></tr></thead>
+    <thead><tr>${!ui.rdShowTrash?'<th></th>':''}<th>Alumno</th><th>Curso</th><th>Entorno Productivo</th><th>Fecha</th><th>Actividades</th><th>Estado</th>${ui.rdShowTrash?'<th></th>':''}</tr></thead>
     <tbody>
-    ${RD_ADMIN_LIST.length? RD_ADMIN_LIST.map(r=>`
-      <tr class="clickable" data-action="open-registro-admin" data-id="${r.id}">
+    ${list.length? list.map(r=>`
+      <tr class="${ui.rdShowTrash?'':'clickable'}" ${ui.rdShowTrash?'':`data-action="open-registro-admin" data-id="${r.id}"`}>
+        ${!ui.rdShowTrash? `<td><input type="checkbox" data-action="rd-select" data-id="${r.id}" ${ui.rdSelected[r.id]?'checked':''} style="width:16px; height:16px;"></td>`:''}
         <td class="cell-strong">${esc(r.studentNombre)}</td>
         <td>${esc(r.curso||'—')}</td>
         <td>${esc(r.sectionNombre||'—')}</td>
         <td class="cell-muted">${fmtDate(r.fecha)}</td>
-        <td>${r.cantidadActividades}</td>
+        <td>${r.modo==='archivo'?'Archivo':r.cantidadActividades}</td>
         <td>${registroEstadoBadge(r.estado)}</td>
-      </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">Sin planillas todavía</div></div></td></tr>`}
+        ${ui.rdShowTrash? `<td><button class="btn btn-sm btn-primary" data-action="rd-restaurar" data-id="${r.id}">${icon('refresh','icon-sm')} Restaurar</button></td>`:''}
+      </tr>`).join('') : `<tr><td colspan="${ui.rdShowTrash?7:6}"><div class="empty-state"><div class="em-icon">${icon('file')}</div><div class="em-title">${ui.rdShowTrash?'La papelera está vacía':'Sin planillas todavía'}</div></div></td></tr>`}
     </tbody>
   </table>
   </div>
@@ -2586,24 +2794,38 @@ function renderRegistrosAdmin(){
 function renderRegistroAdminDetalle(){
   const r = RD;
   if(!r) return `<div class="empty-state">Cargando…</div>`;
-  const canRevisar = ['admin','seccion','coordinador'].includes(session.role) && ['enviada','corregida'].includes(r.estado);
+  const canRevisar = ['admin','seccion','coordinador'].includes(session.role) && ['enviada','en_revision','corregida'].includes(r.estado);
+  const isAdmin = session.role==='admin';
   const student = DB.students.find(s=>s.id===r.studentId);
   return `
   <div class="page-head">
     <div>
-      <button class="btn btn-ghost btn-sm" data-action="back-registros" style="margin-bottom:8px;">← Volver a Planillas del Alumno</button>
+      <button class="btn btn-ghost btn-sm no-print" data-action="back-registros" style="margin-bottom:8px;">← Volver a Planillas del Alumno</button>
       <h1 class="page-title">${student? esc(student.nombre)+' '+esc(student.apellido) : esc(r.studentNombre||'')}</h1>
       <p class="page-sub">${fmtDate(r.fecha)} · ${esc(r.sectionNombre||'Sin entorno productivo')} · ${registroEstadoBadge(r.estado)}</p>
     </div>
+    <div class="no-print" style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn btn-sm" data-action="rd-print">${icon('download','icon-sm')} Imprimir</button>
+      <button class="btn btn-sm" data-action="rd-export-pdf" data-id="${r.id}">${icon('download','icon-sm')} Descargar PDF</button>
+      ${isAdmin? `<button class="btn btn-sm btn-danger" data-action="rd-eliminar" data-id="${r.id}">${icon('trash','icon-sm')} Eliminar</button>`:''}
+    </div>
   </div>
 
+  <div id="registro-print-area">
   <div class="section-card">
     <div class="kv">
       <dt>MEP</dt><dd>${esc(r.mep||'—')}</dd>
       <dt>Grupo</dt><dd>${(DB.groups||[]).find(g=>g.id===r.groupId)?.nombre || '—'}</dd>
+      <dt>Creada</dt><dd>${r.createdAt? new Date(r.createdAt).toLocaleString('es-AR') : '—'}</dd>
+      <dt>Última edición</dt><dd>${r.updatedAt? new Date(r.updatedAt).toLocaleString('es-AR') : '—'}${r.lastModifiedBy? ' · '+esc(r.lastModifiedBy.nombre) : ''}</dd>
     </div>
   </div>
 
+  ${r.modo==='archivo'? `
+  <div class="section-card">
+    <h3>Archivo subido por el alumno</h3>
+    ${r.archivoAdjunto? `<div class="file-chip" style="font-size:13px; padding:9px 14px;">${icon('paperclip','icon-sm')} <a href="${r.archivoAdjunto.url}" target="_blank" rel="noopener">${esc(r.archivoAdjunto.nombre)}</a> <span class="cell-muted">· ${fmtBytes(r.archivoAdjunto.tamano)}</span></div>` : `<p class="cell-muted">Todavía no subió el archivo.</p>`}
+  </div>` : `
   ${(r.actividades||[]).map((a,i)=>`
   <div class="section-card" style="border-left:3px solid var(--accent);">
     <h3>Actividad ${i+1}</h3>
@@ -2625,18 +2847,33 @@ function renderRegistroAdminDetalle(){
   <div class="section-card">
     <h3>Normas BPA</h3>
     <p class="planilla-doc-text">${esc(r.bpa)||'—'}</p>
+  </div>`}
   </div>
 
-  <div class="section-card">
+  <div class="section-card no-print">
     <h3>Revisión del docente</h3>
-    ${r.observacionesDocente? `<p class="cell-muted" style="font-size:12.5px; margin-bottom:10px;"><strong>Observación actual:</strong> ${esc(r.observacionesDocente)}</p>`:''}
+    ${r.observacionesDocente? `<p class="cell-muted" style="font-size:12.5px; margin-bottom:10px;"><strong>Comentario visible para el alumno:</strong> ${esc(r.observacionesDocente)}</p>`:''}
     ${canRevisar? `
-    <div class="field"><label for="rd-obs-docente">Observaciones para el alumno</label><textarea class="input" id="rd-obs-docente" style="min-height:90px;" placeholder="Comentarios o correcciones para el alumno...">${esc(r.observacionesDocente||'')}</textarea></div>
-    <div style="display:flex; gap:8px;">
-      <button class="btn" style="flex:1; justify-content:center;" data-action="registro-revisar" data-estado="corregida" data-id="${r.id}">${icon('edit','icon-sm')} Enviar corrección</button>
-      <button class="btn btn-primary" style="flex:1; justify-content:center;" data-action="registro-revisar" data-estado="aprobada" data-id="${r.id}">${icon('check','icon-sm')} Aprobar planilla</button>
+    <div class="field"><label for="rd-obs-docente">Comentario para el alumno</label><textarea class="input" id="rd-obs-docente" style="min-height:80px;" placeholder="Comentarios o correcciones para el alumno...">${esc(r.observacionesDocente||'')}</textarea></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      ${r.estado==='enviada'? `<button class="btn btn-sm" style="flex:1; justify-content:center;" data-action="registro-revisar" data-estado="en_revision" data-id="${r.id}">${icon('clock','icon-sm')} Poner en revisión</button>`:''}
+      <button class="btn" style="flex:1; justify-content:center;" data-action="registro-revisar" data-estado="corregida" data-id="${r.id}">${icon('edit','icon-sm')} Devolver con observaciones</button>
+      <button class="btn btn-danger" style="flex:1; justify-content:center;" data-action="registro-revisar" data-estado="rechazada" data-id="${r.id}">${icon('x','icon-sm')} Rechazar</button>
+      <button class="btn btn-primary" style="flex:1; justify-content:center;" data-action="registro-revisar" data-estado="aprobada" data-id="${r.id}">${icon('check','icon-sm')} Aprobar</button>
     </div>
     ` : `<p class="cell-muted" style="font-size:12.5px;">${r.estado==='borrador'?'El alumno todavía no envió esta planilla.':'Esta planilla ya fue revisada.'}</p>`}
+  </div>
+
+  <div class="section-card no-print">
+    <h3>Comentario privado <span class="cell-muted" style="font-weight:500; font-size:11.5px;">(solo docentes y administración)</span></h3>
+    ${r.comentarioPrivado? `<p class="cell-muted" style="font-size:12.5px; margin-bottom:10px; background:var(--surface-2); padding:9px 12px; border-radius:var(--r-sm);">${esc(r.comentarioPrivado)}</p>`:''}
+    <div class="field"><textarea class="input" id="rd-comentario-privado" style="min-height:70px;" placeholder="Notas internas, no visibles para el alumno...">${esc(r.comentarioPrivado||'')}</textarea></div>
+    <button class="btn btn-sm" data-action="rd-guardar-comentario-privado" data-id="${r.id}">${icon('check','icon-sm')} Guardar comentario privado</button>
+  </div>
+
+  <div class="section-card no-print">
+    <h3>Historial de cambios</h3>
+    ${(r.historial&&r.historial.length)? `<ul class="mono-list">${r.historial.slice().reverse().map(h=>`<li><span><strong>${esc(h.usuario)}</strong> — ${esc(h.accion)}${h.detalle?': '+esc(h.detalle):''}</span><span class="cell-muted">${new Date(h.fecha).toLocaleString('es-AR')}</span></li>`).join('')}</ul>` : `<p class="cell-muted" style="font-size:12.5px;">Sin historial registrado.</p>`}
   </div>
   `;
 }
@@ -3339,7 +3576,7 @@ function attachGlobalEvents(){
       try{ localStorage.setItem('fat_last_view', ui.view); }catch(e){}
       if(ui.view==='documentos' && !DOCS){ try{ await loadDocumentos(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los documentos','red'); } }
       if(ui.view==='planillas'){ try{ await Promise.all([loadPlanillas(), CRITERIOS?Promise.resolve():loadCriterios()]); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas','red'); } }
-      if(ui.view==='registros'){ try{ await loadRegistrosAdmin(); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas del alumno','red'); } }
+      if(ui.view==='registros'){ ui.rdShowTrash=false; ui.rdSelected={}; try{ await loadRegistrosAdmin(); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas del alumno','red'); } }
       if(ui.view==='cronograma' && !PLANILLAS){ try{ ui.plnFilters={}; await loadPlanillas(); render(); }catch(e){ /* si falla, el cronograma sigue funcionando sin el indicador de asistencia */ } }
       if(ui.view==='config' && !CRITERIOS && session.role==='admin'){ try{ await loadCriterios(); render(); }catch(e){ /* no crítico */ } }
       if(ui.view==='usuarios'){ try{ await loadUsuarios(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los usuarios','red'); } }
@@ -3363,7 +3600,7 @@ function attachGlobalEvents(){
     }
     else if(action==='sp-open-registro'){
       ui.spView='registro'; RD=null; render();
-      loadRegistroDiario(ui.rdFecha).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
+      openRegistroDiario(ui.rdFecha).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
     }
     else if(action==='sp-open-historial'){
       ui.spView='historial'; RD_LIST=null; render();
@@ -3371,7 +3608,12 @@ function attachGlobalEvents(){
     }
     else if(action==='sp-open-planilla-historial'){
       ui.rdFecha = t.getAttribute('data-fecha'); ui.spView='registro'; RD=null; render();
-      loadRegistroDiario(ui.rdFecha).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
+      openRegistroDiario(ui.rdFecha).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
+    }
+    else if(action==='sp-elegir-modo'){
+      const modo = t.getAttribute('data-modo');
+      try{ await crearRegistroConModo(modo); render(); }
+      catch(e){ toast(e.message||'No se pudo crear la planilla','red'); }
     }
     else if(action==='sp-go-home'){ ui.spView='home'; render(); }
     else if(action==='rd-add-actividad'){
@@ -3392,12 +3634,19 @@ function attachGlobalEvents(){
       if(!RD) return;
       clearTimeout(rdSaveTimer);
       try{
-        await apiFetch('PUT', '/api/mi-portal/registros/'+RD.id, { sectionId:RD.sectionId, mep:RD.mep, actividades:RD.actividades, datos:RD.datos, higieneSeguridad:RD.higieneSeguridad, bpa:RD.bpa });
+        if(RD.modo!=='archivo') await apiFetch('PUT', '/api/mi-portal/registros/'+RD.id, { sectionId:RD.sectionId, mep:RD.mep, actividades:RD.actividades, datos:RD.datos, higieneSeguridad:RD.higieneSeguridad, bpa:RD.bpa });
         await apiFetch('POST', '/api/mi-portal/registros/'+RD.id+'/enviar', {});
-        await loadRegistroDiario(RD.fecha);
+        await openRegistroDiario(RD.fecha);
         render(); toast('Planilla guardada correctamente');
       }catch(e){ toast(e.message||'No se pudo guardar la planilla', 'red'); }
     }
+    else if(action==='rd-archivo-eliminar'){
+      if(!RD) return;
+      try{ await apiFetch('DELETE', '/api/mi-portal/registros/'+RD.id+'/archivo'); RD.archivoAdjunto=null; render(); toast('Archivo quitado'); }
+      catch(e){ toast(e.message||'No se pudo quitar el archivo','red'); }
+    }
+    else if(action==='sp-toggle-notif'){ ui.spNotifOpen = !ui.spNotifOpen; if(ui.spNotifOpen && !NOTIFICACIONES) loadNotificaciones().then(render); render(); }
+    else if(action==='sp-notif-click'){ const nid=t.getAttribute('data-id'); marcarNotifLeida(nid); }
     else if(action==='confirm-yes'){ const cb = ui.confirm && ui.confirm.onConfirm; ui.confirm=null; if(cb) await cb(); render(); }
     else if(action==='confirm-no'){ if(e.target===t){ ui.confirm=null; render(); } }
     else if(action==='open-student'){ ui.selectedStudentId=id; ui.view='student-detail'; ui.modal=null; render(); }
@@ -3615,22 +3864,58 @@ function attachGlobalEvents(){
         }
       });
     }
-    else if(action==='open-registro-admin'){
-      ui.view='registro-detalle'; RD=null; render();
-      try{ RD = await apiFetch('GET','/api/registros/'+id); render(); }
-      catch(e){ toast(e.message||'No se pudo cargar la planilla','red'); ui.view='registros'; render(); }
-    }
-    else if(action==='back-registros'){ ui.view='registros'; RD=null; render(); }
+    else if(action==='back-registros'){ ui.view='registros'; RD=null; ui.rdShowTrash=false; render(); }
     else if(action==='registro-revisar'){
       const estado = t.getAttribute('data-estado');
       const observacionesDocente = document.getElementById('rd-obs-docente').value.trim();
-      if(estado==='corregida' && !observacionesDocente){ toast('Escribí una observación para la corrección','red'); return; }
+      if((estado==='corregida'||estado==='rechazada') && !observacionesDocente){ toast('Escribí un comentario para el alumno antes de '+(estado==='rechazada'?'rechazar':'devolver')+' la planilla','red'); return; }
       try{
         await apiFetch('PUT','/api/registros/'+id+'/revisar', { estado, observacionesDocente });
         await loadRegistrosAdmin();
         RD = await apiFetch('GET','/api/registros/'+id);
-        render(); toast(estado==='aprobada'?'Planilla aprobada':'Corrección enviada al alumno');
+        render(); toast({aprobada:'Planilla aprobada', rechazada:'Planilla rechazada', corregida:'Corrección enviada al alumno', en_revision:'Planilla puesta en revisión'}[estado]||'Actualizado');
       }catch(e){ toast(e.message||'No se pudo actualizar', 'red'); }
+    }
+    else if(action==='rd-guardar-comentario-privado'){
+      const texto = document.getElementById('rd-comentario-privado').value.trim();
+      if(!texto){ toast('Escribí un comentario primero','red'); return; }
+      try{
+        await apiFetch('POST','/api/registros/'+id+'/comentario', { texto, privado:true });
+        RD = await apiFetch('GET','/api/registros/'+id);
+        render(); toast('Comentario privado guardado');
+      }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
+    }
+    else if(action==='rd-toggle-trash'){
+      ui.rdShowTrash = !ui.rdShowTrash; ui.rdSelected={};
+      if(ui.rdShowTrash){ RD_TRASH=null; render(); loadRegistrosTrash().then(render).catch(e=>toast(e.message||'No se pudo cargar la papelera','red')); }
+      else render();
+    }
+    else if(action==='rd-select'){
+      const rid = t.getAttribute('data-id');
+      ui.rdSelected[rid] = t.checked; if(!t.checked) delete ui.rdSelected[rid];
+      render();
+    }
+    else if(action==='rd-eliminar'){
+      askConfirm({
+        title:'Eliminar planilla', message:'¿Eliminar esta planilla diaria? Se puede restaurar desde la papelera durante 30 días.',
+        confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/registros/'+id); await loadRegistrosAdmin(); ui.view='registros'; RD=null; render(); toast('Planilla eliminada'); }
+          catch(e){ toast(e.message||'No se pudo eliminar','red'); }
+        }
+      });
+    }
+    else if(action==='rd-restaurar'){
+      try{ await apiFetch('POST','/api/registros/'+id+'/restaurar', {}); await loadRegistrosTrash(); render(); toast('Planilla restaurada'); }
+      catch(e){ toast(e.message||'No se pudo restaurar','red'); }
+    }
+    else if(action==='rd-print'){ window.print(); }
+    else if(action==='rd-export-pdf'){ await exportRegistroPDF(RD); }
+    else if(action==='rd-export-bulk-pdf'){ await exportRegistrosBulkPDF(); }
+    else if(action==='open-registro-admin'){
+      ui.view='registro-detalle'; RD=null; render();
+      try{ RD = await apiFetch('GET','/api/registros/'+id); render(); }
+      catch(e){ toast(e.message||'No se pudo cargar la planilla','red'); ui.view='registros'; render(); }
     }
     else if(action==='add-asistencia'){
       const fecha = document.getElementById('f-asis-fecha').value;
@@ -3820,7 +4105,7 @@ function attachGlobalEvents(){
     }
     else if(t.id==='rd-fecha'){
       ui.rdFecha = t.value; RD=null; render();
-      loadRegistroDiario(ui.rdFecha).then(render).catch(e=> toast(e.message||'No se pudo cargar la planilla de esa fecha','red'));
+      openRegistroDiario(ui.rdFecha).then(render).catch(e=> toast(e.message||'No se pudo cargar la planilla de esa fecha','red'));
     }
     else if(t.classList && t.classList.contains('rd-foto-input')){
       const aid = t.getAttribute('data-aid');
@@ -3836,6 +4121,33 @@ function attachGlobalEvents(){
         if(act){ if(!act.fotos) act.fotos=[]; act.fotos.push({ url:data.url, publicId:data.publicId, nombre:data.nombre }); autosaveRegistro({ actividades: RD.actividades }); }
         render(); toast('Foto agregada');
       }catch(e){ toast(e.message||'No se pudo subir la foto', 'red'); }
+    }
+    else if(t.id==='rd-archivo-input'){
+      const file = t.files && t.files[0];
+      if(!file || !RD) return;
+      const ext = '.'+(file.name.split('.').pop()||'').toLowerCase();
+      const allowedExt = ['.pdf','.doc','.docx','.jpg','.jpeg','.png'];
+      if(!allowedExt.includes(ext)){ toast('Formato no permitido. Usá PDF, DOC, DOCX, JPG o PNG.','red'); t.value=''; return; }
+      const progWrap = document.getElementById('rd-archivo-progress-wrap');
+      const progBar = document.getElementById('rd-archivo-progress-bar');
+      const statusEl = document.getElementById('rd-archivo-status');
+      if(progWrap) progWrap.style.display='block';
+      if(statusEl) statusEl.textContent = 'Subiendo '+file.name+' ('+fmtBytes(file.size)+')…';
+      const fd = new FormData(); fd.append('file', file);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', API_BASE+'/api/mi-portal/registros/'+RD.id+'/archivo');
+      xhr.setRequestHeader('Authorization', 'Bearer '+authToken);
+      xhr.upload.onprogress = (ev)=>{ if(ev.lengthComputable && progBar) progBar.style.width = Math.round(ev.loaded/ev.total*100)+'%'; };
+      xhr.onload = ()=>{
+        if(progWrap) progWrap.style.display='none';
+        try{
+          const data = JSON.parse(xhr.responseText);
+          if(xhr.status>=200 && xhr.status<300){ RD.archivoAdjunto = data.archivoAdjunto; render(); toast('Archivo subido correctamente'); }
+          else toast(data.error||'No se pudo subir el archivo','red');
+        }catch(err){ toast('No se pudo subir el archivo','red'); }
+      };
+      xhr.onerror = ()=>{ if(progWrap) progWrap.style.display='none'; toast('No se pudo subir el archivo','red'); };
+      xhr.send(fd);
     }
     else if(t.id==='f-doc-file'){
       const f = t.files && t.files[0];
