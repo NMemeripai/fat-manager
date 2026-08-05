@@ -783,7 +783,7 @@ app.post('/api/objetivos-semanales', auth, requireRole('admin', 'seccion', 'coor
     destinoStudentId: destinoTipo === 'alumno' ? destinoStudentId : null,
     destinoGroupIds: (destinoTipo === 'grupo' || destinoTipo === 'grupos') ? destinoGroupIds : [],
     destinoSectionId: destinoTipo === 'seccion' ? destinoSectionId : null,
-    archivo, createdBy: req.user.id, createdByNombre: req.user.nombre, createdAt: new Date().toISOString()
+    archivo, createdBy: req.user.sub, createdByNombre: req.user.nombre, createdAt: new Date().toISOString()
   });
   await logActivity(`${req.user.nombre} asignó un objetivo semanal.`);
   res.status(201).json({ id });
@@ -792,7 +792,7 @@ app.post('/api/objetivos-semanales', auth, requireRole('admin', 'seccion', 'coor
 app.delete('/api/objetivos-semanales/:id', auth, requireRole('admin', 'seccion', 'coordinador'), h(async (req, res) => {
   const o = await docData(OBJETIVOS_SEM_COL, req.params.id);
   if (!o) return res.status(404).json({ error: 'Objetivo no encontrado' });
-  if (req.user.role === 'seccion' && o.createdBy !== req.user.id) return res.status(403).json({ error: 'Solo podés eliminar los objetivos que vos asignaste' });
+  if (req.user.role === 'seccion' && o.createdBy !== req.user.sub) return res.status(403).json({ error: 'Solo podés eliminar los objetivos que vos asignaste' });
   await db.collection(OBJETIVOS_SEM_COL).doc(req.params.id).delete();
   res.json({ ok: true });
 }));
