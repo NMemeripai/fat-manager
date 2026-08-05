@@ -238,6 +238,9 @@ app.get('/api/state', auth, h(async (req, res) => {
   if (wants('cronogramaActividades')) {
     result.cronogramaActividades = ['admin', 'coordinador', 'viewadmin'].includes(req.user.role) ? await allDocs('cronogramaActividades') : [];
   }
+  if (wants('objetivosSemanales')) {
+    result.objetivosSemanales = await listarObjetivosSemanales(req.user);
+  }
   res.json(result);
 }));
 
@@ -660,6 +663,31 @@ app.put('/api/guidelines', auth, requireRole('admin', 'coordinador'), h(async (r
   res.json({ ok: true });
 }));
 
+// Objetivo General del establecimiento: un enlace de Drive O un archivo PDF/DOC/DOCX. Vale para todo el ciclo lectivo.
+app.put('/api/objetivo-general', auth, requireRole('admin'), upload.single('file'), h(async (req, res) => {
+  let objetivoGeneral;
+  if (req.file) {
+    if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
+    const ext = extOf(req.file.originalname);
+    if (!['.pdf', '.doc', '.docx'].includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Usá PDF, DOC o DOCX.' });
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'fat-manager/objetivo-general', resource_type: 'raw', public_id: uid('objgen') + ext },
+        (err, rr) => err ? reject(err) : resolve(rr)
+      );
+      stream.end(req.file.buffer);
+    });
+    objetivoGeneral = { tipo: 'archivo', url: result.secure_url, nombre: req.file.originalname };
+  } else if (req.body.url) {
+    objetivoGeneral = { tipo: 'link', url: req.body.url, nombre: req.body.nombre || 'Enlace de Drive' };
+  } else {
+    objetivoGeneral = null;
+  }
+  await db.collection('config').doc('main').update({ objetivoGeneral });
+  await logActivity('Se actualizó el Objetivo General del establecimiento.');
+  res.json({ ok: true, objetivoGeneral });
+}));
+
 app.post('/api/consignas', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
   const id = uid('c');
   await db.collection('consignas').doc(id).set({ texto: req.body.texto });
@@ -679,6 +707,93 @@ app.post('/api/objetivos', auth, requireRole('admin', 'coordinador'), h(async (r
 }));
 app.delete('/api/objetivos/:id', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
   await db.collection('objetivos').doc(req.params.id).delete();
+  res.json({ ok: true });
+}));
+
+/* ---------------------------- Objetivos Semanales (asignación masiva: alumno / grupo(s) / entorno productivo) ---------------------------- */
+const OBJETIVOS_SEM_COL = 'objetivosSemanales';
+function objetivoAplicaA(o, student, sectionId) {
+  if (o.destinoStudentId) return o.destinoStudentId === student.id;
+  if (o.destinoGroupIds && o.destinoGroupIds.length && !o.destinoGroupIds.includes(student.groupId)) return false;
+  if (o.destinoSectionId && sectionId && o.destinoSectionId !== sectionId) return false;
+  if (o.destinoSectionId && !sectionId) return false;
+  return true;
+}
+async function objetivosSemanalesParaAlumno(student, sectionId) {
+  const todos = await allDocs(OBJETIVOS_SEM_COL);
+  return todos.filter(o => objetivoAplicaA(o, student, sectionId))
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+}
+
+async function listarObjetivosSemanales(user) {
+  let list = await allDocs(OBJETIVOS_SEM_COL);
+  if (user.role === 'seccion') {
+    const misSecciones = (await allDocs('sections')).filter(s => s.teacherId === user.teacherId).map(s => s.id);
+    list = list.filter(o => !o.destinoSectionId || misSecciones.includes(o.destinoSectionId));
+  }
+  list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const groups = await allDocs('groups');
+  const sections = await allDocs('sections');
+  const students = await allDocs('students');
+  const gById = Object.fromEntries(groups.map(g => [g.id, g.nombre]));
+  const sById = Object.fromEntries(sections.map(s => [s.id, s.nombre]));
+  const stById = Object.fromEntries(students.map(s => [s.id, s.nombre + ' ' + s.apellido]));
+  return list.map(o => ({
+    ...o,
+    destinoGrupoNombres: (o.destinoGroupIds || []).map(id => gById[id]).filter(Boolean),
+    destinoSectionNombre: o.destinoSectionId ? sById[o.destinoSectionId] : null,
+    destinoStudentNombre: o.destinoStudentId ? stById[o.destinoStudentId] : null
+  }));
+}
+app.get('/api/objetivos-semanales', auth, blockAlumno, h(async (req, res) => {
+  const enriched = await listarObjetivosSemanales(req.user);
+  res.json({ objetivosSemanales: enriched });
+}));
+
+app.post('/api/objetivos-semanales', auth, requireRole('admin', 'seccion', 'coordinador'), upload.single('file'), h(async (req, res) => {
+  const { texto, destinoTipo, destinoStudentId, destinoSectionId } = req.body || {};
+  let destinoGroupIds = req.body.destinoGroupIds;
+  if (typeof destinoGroupIds === 'string') destinoGroupIds = destinoGroupIds.split(',').map(s => s.trim()).filter(Boolean);
+  if (!texto || !texto.trim()) return res.status(400).json({ error: 'El objetivo no puede estar vacío' });
+  if (destinoTipo === 'alumno' && !destinoStudentId) return res.status(400).json({ error: 'Elegí un alumno' });
+  if ((destinoTipo === 'grupo' || destinoTipo === 'grupos') && (!destinoGroupIds || !destinoGroupIds.length)) return res.status(400).json({ error: 'Elegí al menos un grupo' });
+  if (destinoTipo === 'seccion' && !destinoSectionId) return res.status(400).json({ error: 'Elegí un entorno productivo' });
+  // Un profesor de sección solo puede asignar objetivos dentro de su propia sección.
+  if (req.user.role === 'seccion') {
+    const misSecciones = (await allDocs('sections')).filter(s => s.teacherId === req.user.teacherId).map(s => s.id);
+    if (destinoSectionId && !misSecciones.includes(destinoSectionId)) return res.status(403).json({ error: 'Solo podés asignar objetivos en tu propia sección' });
+  }
+  let archivo = null;
+  if (req.file) {
+    if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
+    const ext = extOf(req.file.originalname);
+    if (!['.pdf', '.doc', '.docx'].includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Usá PDF, DOC o DOCX.' });
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'fat-manager/objetivos-semanales', resource_type: 'raw', public_id: uid('objsem') + ext },
+        (err, rr) => err ? reject(err) : resolve(rr)
+      );
+      stream.end(req.file.buffer);
+    });
+    archivo = { url: result.secure_url, nombre: req.file.originalname };
+  }
+  const id = uid('osem');
+  await db.collection(OBJETIVOS_SEM_COL).doc(id).set({
+    texto: texto.trim(),
+    destinoStudentId: destinoTipo === 'alumno' ? destinoStudentId : null,
+    destinoGroupIds: (destinoTipo === 'grupo' || destinoTipo === 'grupos') ? destinoGroupIds : [],
+    destinoSectionId: destinoTipo === 'seccion' ? destinoSectionId : null,
+    archivo, createdBy: req.user.id, createdByNombre: req.user.nombre, createdAt: new Date().toISOString()
+  });
+  await logActivity(`${req.user.nombre} asignó un objetivo semanal.`);
+  res.status(201).json({ id });
+}));
+
+app.delete('/api/objetivos-semanales/:id', auth, requireRole('admin', 'seccion', 'coordinador'), h(async (req, res) => {
+  const o = await docData(OBJETIVOS_SEM_COL, req.params.id);
+  if (!o) return res.status(404).json({ error: 'Objetivo no encontrado' });
+  if (req.user.role === 'seccion' && o.createdBy !== req.user.id) return res.status(403).json({ error: 'Solo podés eliminar los objetivos que vos asignaste' });
+  await db.collection(OBJETIVOS_SEM_COL).doc(req.params.id).delete();
   res.json({ ok: true });
 }));
 
@@ -833,7 +948,8 @@ app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
   const cfgSnap = await db.collection('config').doc('main').get();
   const config = cfgSnap.data();
   const consignas = await allDocs('consignas');
-  const objetivos = await allDocs('objetivos');
+  const currentSectionId = current ? current.sectionId : null;
+  const objetivosSemanales = await objetivosSemanalesParaAlumno(student, currentSectionId);
 
   const rotationsSummary = await Promise.all(rotations.map(async r => {
     const section = await docData('sections', r.sectionId);
@@ -859,7 +975,7 @@ app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
   res.json({
     student: { nombre: student.nombre, apellido: student.apellido, curso: student.curso, division: student.division, legajo: student.legajo, estado: student.estado },
     totalWeeks: config.totalWeeks, semanaActual: student.estado === 'activo' ? currentWeekOf(student, config) : null,
-    lineamientos: config.lineamientos, consignas, objetivos,
+    lineamientos: config.lineamientos, objetivoGeneral: config.objetivoGeneral || null, consignas, objetivosSemanales,
     current: currentDetail, rotaciones: rotationsSummary
   });
 }));
@@ -1202,10 +1318,13 @@ app.get('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, r
     const rotationsRaw = await whereEquals('rotations', 'studentId', studentId);
     const current = rotationsRaw.find(r => r.status === 'en_curso') || null;
     const secciones = (await allDocs('sections')).map(s => ({ id: s.id, nombre: s.nombre }));
+    const sectionIdParaObjetivo = registro ? registro.sectionId : (current ? current.sectionId : null);
+    const objetivosSemanales = await objetivosSemanalesParaAlumno(student, sectionIdParaObjetivo);
 
     return res.json({
       registro,
       secciones,
+      objetivosSemanales,
       sugerido: {
         alumno: student.nombre + ' ' + student.apellido,
         grupo: group ? group.nombre : null,
@@ -1357,6 +1476,7 @@ app.get('/api/registros', auth, blockAlumno, h(async (req, res) => {
   const papelera = req.query.papelera === '1';
   if (papelera && req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador puede ver la papelera' });
   list = list.filter(r => papelera ? !!r.deletedAt : !r.deletedAt);
+  list = list.filter(r => r.estado !== 'borrador'); // los borradores solo los ve el alumno que los creó
   if (req.user.role === 'seccion') list = list.filter(r => r.teacherId === req.user.teacherId);
   const { curso, groupId, studentId, sectionId, fecha, estado } = req.query;
   if (curso) list = list.filter(r => r.curso === curso);
@@ -1378,6 +1498,7 @@ app.get('/api/registros', auth, blockAlumno, h(async (req, res) => {
 app.get('/api/registros/:id', auth, blockAlumno, h(async (req, res) => {
   const r = await docData(REGISTROS_COL, req.params.id);
   if (!r) return res.status(404).json({ error: 'Registro no encontrado' });
+  if (r.estado === 'borrador') return res.status(403).json({ error: 'Los borradores solo son visibles para el alumno que los creó' });
   if (!canViewRegistro(req.user, r)) return res.status(403).json({ error: 'No tenés permiso para ver este registro' });
   const student = await docData('students', r.studentId);
   res.json({ ...r, studentNombre: student ? student.nombre + ' ' + student.apellido : '—' });
