@@ -678,14 +678,183 @@ app.put('/api/pendientes/:id', auth, h(async (req, res) => {
   if (!p) return res.status(404).json({ error: 'Registro no encontrado' });
   if (!canTouchPendiente(req.user, p)) return res.status(403).json({ error: 'No tenés permiso para editar este registro' });
   const { estado } = req.body || {};
-  if (!['pendiente', 'en_recuperacion', 'completado'].includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
+  if (!['pendiente', 'en_recuperacion', 'completado', 'no_recuperado'].includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
   await db.collection('pendientes').doc(req.params.id).update({ estado });
+  res.json({ ok: true });
+}));
+
+// Registro completo de un recuperatorio (fecha, contenido recuperado, resultado, observaciones).
+// Reutiliza el mismo registro de "pendientes" en vez de crear una colección aparte — el pendiente
+// y su recuperatorio son la misma entidad en dos momentos distintos.
+app.put('/api/pendientes/:id/recuperatorio', auth, requireRole('admin'), h(async (req, res) => {
+  const p = await docData('pendientes', req.params.id);
+  if (!p) return res.status(404).json({ error: 'Registro no encontrado' });
+  const { estadoRecuperacion, fechaRecuperatorio, contenidoRecuperado, actividadRealizada, resultado, observacionesRecuperatorio } = req.body || {};
+  if (!['programado', 'recuperado', 'no_recuperado'].includes(estadoRecuperacion)) return res.status(400).json({ error: 'Estado de recuperación inválido' });
+  const estadoMap = { programado: 'en_recuperacion', recuperado: 'completado', no_recuperado: 'no_recuperado' };
+  await db.collection('pendientes').doc(req.params.id).update({
+    estado: estadoMap[estadoRecuperacion],
+    recuperatorio: {
+      estadoRecuperacion, fechaRecuperatorio: fechaRecuperatorio || null, contenidoRecuperado: contenidoRecuperado || '',
+      actividadRealizada: actividadRealizada || '', resultado: resultado || '', observaciones: observacionesRecuperatorio || '',
+      registradoPor: req.user.nombre, registradoAt: new Date().toISOString()
+    }
+  });
+  const student = await docData('students', p.studentId);
+  await logActivity(`${req.user.nombre} registró un recuperatorio de ${student ? student.nombre + ' ' + student.apellido : 'un alumno'}.`);
   res.json({ ok: true });
 }));
 
 app.delete('/api/pendientes/:id', auth, requireRole('admin'), h(async (req, res) => {
   await db.collection('pendientes').doc(req.params.id).delete();
   res.json({ ok: true });
+}));
+
+// Nota Final: no existe una fórmula automática ya definida para combinar las calificaciones
+// E/MB/B/R/M en un solo valor final, así que (tal como se pidió) no se inventa una — queda
+// como un campo que carga manualmente el administrador.
+app.put('/api/students/:id/nota-final', auth, requireRole('admin'), h(async (req, res) => {
+  const s = await docData('students', req.params.id);
+  if (!s) return res.status(404).json({ error: 'Alumno no encontrado' });
+  await db.collection('students').doc(req.params.id).update({ notaFinal: req.body.notaFinal || null });
+  await logActivity(`Se cargó la nota final de ${s.nombre} ${s.apellido}.`);
+  res.json({ ok: true });
+}));
+
+/* ---------------------------- Seguimiento de Alumnos (Dashboard ampliado) ----------------------------
+   Junta datos que YA existen en otros módulos (rotaciones/cronograma, respuestas semanales del
+   alumno, pendientes/recuperatorios, planillas/calificaciones) en una sola vista de seguimiento,
+   sin duplicar ni volver a cargar nada de eso a mano. */
+function addDaysISO(iso, n) {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+async function buildSeguimiento(studentId) {
+  const student = await docData('students', studentId);
+  if (!student) return null;
+  const cfgSnap = await db.collection('config').doc('main').get();
+  const config = cfgSnap.data();
+  const today = todayISO();
+  const totalWeeks = config.totalWeeks || 20;
+
+  const rotations = (await whereEquals('rotations', 'studentId', studentId)).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+  const sections = await allDocs('sections');
+  const teachers = await allDocs('teachers');
+  const sById = Object.fromEntries(sections.map(s => [s.id, s]));
+  const tById = Object.fromEntries(teachers.map(t => [t.id, t]));
+  const group = student.groupId ? await docData('groups', student.groupId) : null;
+
+  const current = rotations.find(r => today >= r.startDate && today <= r.endDate)
+    || rotations.filter(r => r.startDate <= today).sort((a, b) => b.startDate.localeCompare(a.startDate))[0]
+    || rotations.find(r => r.startDate > today) || rotations[rotations.length - 1] || null;
+
+  const pendientes = (await whereEquals('pendientes', 'studentId', studentId)).map(p => ({
+    ...p, sectionNombre: p.sectionId && sById[p.sectionId] ? sById[p.sectionId].nombre : null,
+    teacherNombre: p.teacherId && tById[p.teacherId] ? tById[p.teacherId].nombre : null
+  })).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const pendientesPorSemana = {};
+  pendientes.forEach(p => { if (p.semana != null) pendientesPorSemana[p.semana] = p; });
+
+  // Semana a semana: la fuente de verdad es fecha de inicio del alumno + duración configurada,
+  // igual que currentWeekOf(); acá reconstruimos el rango de cada semana con el mismo criterio.
+  const semanas = [];
+  for (let wk = 1; wk <= totalWeeks; wk++) {
+    const desde = addDaysISO(student.fechaInicio, (wk - 1) * 7);
+    const hasta = addDaysISO(student.fechaInicio, wk * 7 - 1);
+    const rot = rotations.find(r => desde <= r.endDate && hasta >= r.startDate);
+    const pend = pendientesPorSemana[wk];
+    let estado;
+    if (pend) estado = pend.estado === 'completado' ? 'recuperada' : 'con_pendiente';
+    else if (today > hasta) estado = 'completada';
+    else if (today >= desde && today <= hasta) estado = 'en_curso';
+    else estado = 'futura';
+    semanas.push({ numero: wk, desde, hasta, sectionNombre: rot && sById[rot.sectionId] ? sById[rot.sectionId].nombre : null, estado });
+  }
+
+  const contenidosPorSemana = [];
+  rotations.forEach(r => {
+    (r.respuestasAlumno || []).forEach(resp => {
+      contenidosPorSemana.push({
+        semana: resp.semana, sectionNombre: sById[r.sectionId] ? sById[r.sectionId].nombre : null,
+        leido: !!resp.leido, actividadRealizada: !!resp.actividadRealizada,
+        documentoId: resp.documentoId || null, observacion: resp.observacion || '',
+        estado: resp.actividadRealizada ? 'completado' : (resp.leido ? 'en_proceso' : 'pendiente')
+      });
+    });
+  });
+  contenidosPorSemana.sort((a, b) => (a.semana || 0) - (b.semana || 0));
+
+  const planillas = (await allDocs('planillas')).filter(p => p.studentId === studentId).map(p => ({
+    id: p.id, fecha: p.fecha, sectionNombre: p.sectionId && sById[p.sectionId] ? sById[p.sectionId].nombre : (p.entorno || null),
+    teacherNombre: p.teacherId && tById[p.teacherId] ? tById[p.teacherId].nombre : null,
+    calificacion: p.calificacion || null, observaciones: p.observaciones || ''
+  })).sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+
+  const semanasCompletadas = semanas.filter(s => s.estado === 'completada' || s.estado === 'recuperada').length;
+  const semanasConPendiente = semanas.filter(s => s.estado === 'con_pendiente').length;
+  const semanasCursadas = semanas.filter(s => s.estado !== 'futura').length;
+
+  return {
+    student: { id: student.id, nombre: student.nombre, apellido: student.apellido, legajo: student.legajo, curso: student.curso, division: student.division, estado: student.estado, notaFinal: student.notaFinal || null },
+    curso: student.curso, division: student.division, grupo: group ? group.nombre : null,
+    seccionActual: current && sById[current.sectionId] ? sById[current.sectionId].nombre : null,
+    profesorMEP: current && current.teacherId && tById[current.teacherId] ? tById[current.teacherId].nombre : null,
+    totalWeeks, semanas,
+    resumen: {
+      semanasCursadas, semanasCompletadas, semanasPendientes: semanasConPendiente,
+      porcentajeAvance: totalWeeks ? Math.round(semanasCompletadas / totalWeeks * 100) : 0,
+      contenidosRealizados: contenidosPorSemana.filter(c => c.actividadRealizada).length,
+      contenidosPendientes: pendientes.filter(p => p.estado !== 'completado').length,
+      cantidadRecuperatorios: pendientes.filter(p => p.recuperatorio).length,
+      recuperatoriosRecuperados: pendientes.filter(p => p.recuperatorio && p.recuperatorio.estadoRecuperacion === 'recuperado').length
+    },
+    contenidosPorSemana, pendientes, calificaciones: planillas
+  };
+}
+
+app.get('/api/seguimiento', auth, requireRole('admin', 'viewadmin', 'coordinador'), h(async (req, res) => {
+  const { q, curso, groupId, sectionId } = req.query;
+  let students = await allDocs('students');
+  if (curso) students = students.filter(s => s.curso === curso);
+  if (groupId) students = students.filter(s => s.groupId === groupId);
+  if (q) {
+    const qq = String(q).toLowerCase();
+    students = students.filter(s => (s.nombre + ' ' + s.apellido).toLowerCase().includes(qq) || String(s.legajo || '').toLowerCase().includes(qq));
+  }
+  if (sectionId) {
+    const today = todayISO();
+    const allRot = await allDocs('rotations');
+    const idsEnSeccion = new Set(allRot.filter(r => r.sectionId === sectionId && today >= r.startDate && today <= r.endDate).map(r => r.studentId));
+    students = students.filter(s => idsEnSeccion.has(s.id));
+  }
+  students.sort((a, b) => {
+    const da = String(a.legajo || '').match(/\d+/g), db_ = String(b.legajo || '').match(/\d+/g);
+    const na = da ? da.map(d => d.padStart(10, '0')).join('-') : String(a.legajo || '');
+    const nb = db_ ? db_.map(d => d.padStart(10, '0')).join('-') : String(b.legajo || '');
+    return na.localeCompare(nb);
+  });
+  const groups = await allDocs('groups');
+  const gById = Object.fromEntries(groups.map(g => [g.id, g.nombre]));
+  const rotations = await allDocs('rotations');
+  const sections = await allDocs('sections');
+  const sById = Object.fromEntries(sections.map(s => [s.id, s.nombre]));
+  const today = todayISO();
+  const resumen = students.map(s => {
+    const rots = rotations.filter(r => r.studentId === s.id);
+    const current = rots.find(r => today >= r.startDate && today <= r.endDate) || null;
+    return {
+      id: s.id, nombre: s.nombre, apellido: s.apellido, legajo: s.legajo, curso: s.curso, division: s.division,
+      grupo: s.groupId ? gById[s.groupId] : null, seccionActual: current ? sById[current.sectionId] : null, estado: s.estado
+    };
+  });
+  res.json({ alumnos: resumen });
+}));
+
+app.get('/api/seguimiento/:studentId', auth, requireRole('admin', 'viewadmin', 'coordinador'), h(async (req, res) => {
+  const data = await buildSeguimiento(req.params.studentId);
+  if (!data) return res.status(404).json({ error: 'Alumno no encontrado' });
+  res.json(data);
 }));
 
 /* ---------------------------- config y lineamientos ---------------------------- */
