@@ -10,7 +10,13 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "dependencies": {{
   "dependencies": {
+    "express-rate-limit": "^8.6.2",
+    "helmet": "^8.3.0"
+  }
+}
+
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.7.0",
     "cors": "^2.8.6",
