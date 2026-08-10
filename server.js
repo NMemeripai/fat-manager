@@ -1075,23 +1075,35 @@ app.delete('/api/comunicados/:id', auth, requireRole('admin'), h(async (req, res
    puntuales por día (sección, horario, observaciones), sin tocar la colección
    "rotations" ni sus datos ya cargados. */
 app.post('/api/cronograma-actividades', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
-  const { fecha, sectionId, horaInicio, horaFin, observaciones } = req.body || {};
+  const { fecha, sectionId, studentId, tipo, motivo, horaInicio, horaFin, observaciones } = req.body || {};
   if (!fecha || !sectionId) return res.status(400).json({ error: 'Fecha y sección son obligatorias' });
+  if (studentId) {
+    const student = await docData('students', studentId);
+    if (!student) return res.status(400).json({ error: 'El alumno indicado no existe' });
+  }
   const id = uid('act');
   const record = {
-    fecha, sectionId, horaInicio: horaInicio || null, horaFin: horaFin || null, observaciones: observaciones || '',
+    fecha, sectionId, studentId: studentId || null, tipo: tipo || null, motivo: motivo || '',
+    horaInicio: horaInicio || null, horaFin: horaFin || null, observaciones: observaciones || '',
     createdBy: req.user.sub, createdByNombre: req.user.nombre, createdAt: new Date().toISOString()
   };
   await db.collection('cronogramaActividades').doc(id).set(record);
+  if (studentId) {
+    const student = await docData('students', studentId);
+    await logActivity(`Se registró una excepción para ${student.nombre} ${student.apellido} el ${fecha}.`);
+  }
   res.status(201).json({ id, ...record });
 }));
 
 app.put('/api/cronograma-actividades/:id', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
   const a = await docData('cronogramaActividades', req.params.id);
   if (!a) return res.status(404).json({ error: 'Actividad no encontrada' });
-  const { fecha, sectionId, horaInicio, horaFin, observaciones } = req.body || {};
+  const { fecha, sectionId, studentId, tipo, motivo, horaInicio, horaFin, observaciones } = req.body || {};
   await db.collection('cronogramaActividades').doc(req.params.id).update({
     fecha: fecha || a.fecha, sectionId: sectionId || a.sectionId,
+    studentId: studentId !== undefined ? (studentId || null) : a.studentId,
+    tipo: tipo !== undefined ? (tipo || null) : (a.tipo || null),
+    motivo: motivo !== undefined ? motivo : (a.motivo || ''),
     horaInicio: horaInicio !== undefined ? (horaInicio || null) : a.horaInicio,
     horaFin: horaFin !== undefined ? (horaFin || null) : a.horaFin,
     observaciones: observaciones !== undefined ? observaciones : a.observaciones
