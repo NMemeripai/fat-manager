@@ -498,6 +498,48 @@ let RD_SUGERIDO_TMP = null; // datos sugeridos mientras el alumno elige el modo 
 let NOTIFICACIONES = null; // notificaciones del alumno (aprobación/rechazo/corrección)
 let rdSaveTimer = null;
 let session = null;
+let tourStep = null; // null = tour cerrado; número = paso actual del tour interactivo
+
+function tourStorageKey(){ return session ? 'fat_tour_seen_'+session.username : null; }
+function maybeStartTour(){
+  if(!session) return;
+  const key = tourStorageKey();
+  try{ if(key && !localStorage.getItem(key)) tourStep = 0; }catch(e){}
+}
+function marcarTourVisto(){
+  const key = tourStorageKey();
+  try{ if(key) localStorage.setItem(key, '1'); }catch(e){}
+}
+function renderTourOverlay(){
+  if(tourStep==null) return '';
+  const topics = GUIA_TOPICS[session.role] || [];
+  if(!topics.length){ tourStep=null; return ''; }
+  const i = Math.max(0, Math.min(tourStep, topics.length-1));
+  const t = topics[i];
+  const esUltimo = i===topics.length-1;
+  return `
+  <div class="modal-overlay" style="z-index:300; align-items:center;">
+    <div class="modal modal-sm" style="text-align:center; padding-top:6px;">
+      <div class="modal-body" style="padding-top:30px;">
+        ${i===0? `<h2 style="margin-bottom:6px;">Bienvenido a FAT Manager 👋</h2><p class="cell-muted" style="font-size:12.5px; margin-bottom:18px;">Un recorrido rápido por lo más importante de tu panel.</p>`:''}
+        <div class="confirm-ico" style="background:var(--accent-soft); color:var(--accent-2); margin:0 auto 14px;">${icon(t.icono,'icon-lg')}</div>
+        <h3 style="margin-bottom:8px;">${esc(t.titulo)}</h3>
+        <p style="color:var(--text-2); font-size:13.5px; line-height:1.6; margin-bottom:16px;">${esc(t.texto)}</p>
+        <div style="display:flex; justify-content:center; gap:5px; margin-bottom:18px;">
+          ${topics.map((_,idx)=>`<span style="width:6px; height:6px; border-radius:50%; background:${idx===i?'var(--accent)':'var(--border-strong)'};"></span>`).join('')}
+        </div>
+      </div>
+      <div class="modal-foot" style="justify-content:space-between;">
+        <button class="btn btn-ghost btn-sm" data-action="tour-skip">Omitir guía</button>
+        <div style="display:flex; gap:8px;">
+          ${i>0? `<button class="btn btn-sm" data-action="tour-back">${icon('arrowLeft','icon-sm')} Atrás</button>`:''}
+          <button class="btn btn-primary btn-sm" data-action="${esUltimo?'tour-skip':'tour-next'}">${esUltimo?'Empezar a usar FAT Manager':'Siguiente'} ${esUltimo?'':icon('arrowRight','icon-sm')}</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
 let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, modal:null, confirm:null, filters:{},
   sort:{ students:{key:'legajo',dir:'asc'}, rotations:{key:'periodo',dir:'asc'}, documentosAlumno:{key:'fecha',dir:'desc'} },
   page:{ students:1, rotations:1, documentosAlumno:1 },
@@ -971,6 +1013,7 @@ async function tryLogin(username, password){
   const data = await apiFetch('POST', '/api/auth/login', { username, password }); // lanza Error si falla
   persistSession(data.token, data.user);
   ui.view = data.user.role==='seccion' ? 'teacherHome' : 'dashboard';
+  maybeStartTour();
   return true;
 }
 function logout(){ authToken=null; session=null; localStorage.removeItem('fat_token'); localStorage.removeItem('fat_session'); ui.view='dashboard'; ui.userMenuOpen=false; render(); }
@@ -1029,13 +1072,14 @@ function renderStudentPortalPage(){
       </div>`}
       <div class="topbar-spacer"></div>
       <span class="cell-muted" style="font-size:13px; margin-right:10px;">${esc(SP.student.nombre)} ${esc(SP.student.apellido)}</span>
+      <button class="icon-btn" data-action="sp-open-ayuda" title="Ayuda" aria-label="Ayuda">${icon('checkCircle','icon-sm')}</button>
       <button class="icon-btn" data-action="sp-toggle-notif" title="Notificaciones" aria-label="Notificaciones">${icon('bell','icon-sm')}${unread? `<span class="badge-dot">${unread>9?'9+':unread}</span>`:''}</button>
       <button class="icon-btn" data-action="toggle-theme" title="Cambiar tema" aria-label="Cambiar tema">${ui.theme==='light'?icon('moon','icon-sm'):icon('sun','icon-sm')}</button>
       <button class="btn btn-sm" data-action="logout" aria-label="Cerrar sesión">${icon('logout','icon-sm')} Salir</button>
     </div>
     ${ui.spNotifOpen? renderSPNotifPanel() : ''}
     <main class="content" style="max-width:760px; margin:0 auto;">
-      ${ui.spView==='elegir-modo'? renderElegirModo() : ui.spView==='archivo-upload'? renderArchivoUpload() : ui.spView==='registro'? renderRegistroDiarioForm() : ui.spView==='historial'? renderMisPlanillasHistorial() : renderSPHome()}
+      ${ui.spView==='elegir-modo'? renderElegirModo() : ui.spView==='archivo-upload'? renderArchivoUpload() : ui.spView==='registro'? renderRegistroDiarioForm() : ui.spView==='historial'? renderMisPlanillasHistorial() : ui.spView==='ayuda'? renderSPAyuda() : renderSPHome()}
     </main>
   </div>
   ${ui.modal? renderModal() : ''}
@@ -1263,6 +1307,25 @@ function renderActividadCard(a,i,locked){
   </div>`;
 }
 
+/* ---------------------------- Ayuda (Panel del Alumno) ---------------------------- */
+function renderSPAyuda(){
+  const topics = GUIA_TOPICS.alumno || [];
+  return `
+      <div class="page-head">
+        <div><h1 class="page-title">❓ Ayuda</h1><p class="page-sub">${guiaTituloRol('alumno')}</p></div>
+      </div>
+      <button class="btn btn-primary" style="width:100%; justify-content:center; margin-bottom:16px;" data-action="ver-guia-de-nuevo">${icon('refresh','icon-sm')} Ver guía nuevamente</button>
+      ${topics.map(t=>`
+        <div class="card" style="margin-bottom:12px;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+            <div class="stat-icon" style="background:var(--accent-soft); color:var(--accent-2);">${icon(t.icono,'icon-sm')}</div>
+            <div style="font-weight:700; font-size:14px;">${esc(t.titulo)}</div>
+          </div>
+          <p class="cell-muted" style="font-size:12.5px; line-height:1.6;">${esc(t.texto)}</p>
+        </div>`).join('')}
+  `;
+}
+
 /* ---------------------------- Mis Planillas: historial (Panel del Alumno) ---------------------------- */
 function renderMisPlanillasHistorial(){
   return `
@@ -1440,6 +1503,7 @@ function renderShell(){
         ${navItem('documentos','file','Centro de Documentos', ['admin','viewadmin'])}
         ${navItem('usuarios','users','Gestión de Usuarios', ['admin'])}
         ${navItem('config','sliders','Configuración', ['admin','viewadmin'])}
+        ${navItem('ayuda','checkCircle','❓ Ayuda')}
       </div>
       <div class="sidebar-foot">
         <div class="user-chip" data-action="toggle-user-menu">
@@ -1479,6 +1543,64 @@ function roleLabel(role){
   return {admin:'Administrador', coordinador:'Coordinador FAT', seccion:'Profesor de sección', viewadmin:'VIEW ADMIN · Solo lectura'}[role] || role;
 }
 
+/* =========================================================================
+   AYUDA Y GUÍA DE USO — contenido único por rol, reutilizado tanto en la
+   página "❓ Ayuda" como en el tour interactivo, así nunca se desincronizan
+   entre sí. Solo describe funciones que realmente existen para ese rol.
+   ========================================================================= */
+const GUIA_TOPICS = {
+  admin: [
+    {icono:'grid', titulo:'Dashboard', texto:'Indicadores generales del FAT (alumnos, rotaciones activas, pendientes, promedios) y "Seguimiento de Alumnos": buscá cualquier alumno y abrí su ficha completa.', view:'dashboard'},
+    {icono:'users', titulo:'Gestión de Alumnos', texto:'Alta, edición y baja de alumnos, ordenados por legajo. Desde acá también accedés al detalle de rotaciones de cada uno.', view:'students'},
+    {icono:'user', titulo:'Profesores MEP', texto:'Se crean y editan desde Configuración → Profesores: nombre, sección a cargo y usuario de acceso.', view:'config'},
+    {icono:'users', titulo:'Creación de VIEW ADMIN', texto:'En Gestión de Usuarios podés crear cuentas de solo lectura para quien necesite consultar el sistema sin poder modificarlo.', view:'usuarios'},
+    {icono:'tag', titulo:'Gestión de Secciones', texto:'Las 4 secciones/entornos productivos por los que rotan los alumnos: nombre, color y profesor asignado.', view:'sections'},
+    {icono:'calendar', titulo:'Cronograma de Rotaciones', texto:'Grilla semanal de todos los alumnos. Abre automáticamente en la semana actual, y podés volver a ella con el botón "Semana actual". Hacé clic en una celda para editar o cargar una excepción puntual.', view:'cronograma'},
+    {icono:'refresh', titulo:'Rotaciones', texto:'Listado completo de rotaciones con filtros por sección y estado, y carga de notas/informes por rotación.', view:'rotations'},
+    {icono:'file', titulo:'Planillas Digitales FAT', texto:'El documento formal de seguimiento por alumno y sección: asistencia, actividades, calificación (E/MB/B/R/M) y observaciones. Se puede exportar a Word.', view:'planillas'},
+    {icono:'edit', titulo:'Planillas del Alumno', texto:'La bitácora diaria que carga cada alumno (actividades, fotos, o un archivo subido). Acá las aprobás, las devolvés con observaciones o las rechazás.', view:'registros'},
+    {icono:'file', titulo:'Centro de Documentos', texto:'Todos los documentos que subieron los alumnos, con filtros y descarga.', view:'documentos'},
+    {icono:'alertTriangle', titulo:'Contenidos Pendientes', texto:'Contenidos o actividades que un alumno tiene sin completar, por sección y semana.', view:'pendientes'},
+    {icono:'checkCircle', titulo:'Recuperatorios', texto:'Se registran desde la ficha de cada alumno en Dashboard → Seguimiento de Alumnos: fecha, resultado y observaciones del recuperatorio de un contenido pendiente.', view:'dashboard'},
+    {icono:'award', titulo:'Calificaciones', texto:'Notas por rotación y promedio por alumno. La Nota Final se carga manualmente desde la ficha de seguimiento.', view:'grades'},
+    {icono:'download', titulo:'Exportaciones', texto:'Podés exportar a PDF o Excel desde Alumnos, Informes, Planillas del Alumno (individual o en lote) y Planillas Digitales FAT (a Word).', view:null},
+    {icono:'sliders', titulo:'Configuración', texto:'Duración del programa, semanas por rotación, gestión de profesores y nota mínima de aprobación.', view:'config'},
+  ],
+  viewadmin: [
+    {icono:'grid', titulo:'Dashboard', texto:'Los mismos indicadores e información de seguimiento que ve el administrador.', view:'dashboard'},
+    {icono:'users', titulo:'Alumnos', texto:'Consultá los datos y el detalle de rotaciones de cualquier alumno.', view:'students'},
+    {icono:'refresh', titulo:'Rotaciones', texto:'Listado completo de rotaciones con sus filtros.', view:'rotations'},
+    {icono:'tag', titulo:'Secciones', texto:'Las secciones/entornos productivos y sus profesores.', view:'sections'},
+    {icono:'file', titulo:'Planillas Digitales FAT', texto:'Consultá asistencia, actividades y calificaciones cargadas por los profesores.', view:'planillas'},
+    {icono:'edit', titulo:'Planillas del Alumno', texto:'Consultá las bitácoras diarias de los alumnos y su estado de revisión.', view:'registros'},
+    {icono:'file', titulo:'Documentos', texto:'Consultá y descargá los documentos que subieron los alumnos.', view:'documentos'},
+    {icono:'alertTriangle', titulo:'Contenidos Pendientes', texto:'Consultá los contenidos pendientes cargados por sección y alumno.', view:'pendientes'},
+    {icono:'checkCircle', titulo:'Recuperatorios', texto:'Consultá el estado de los recuperatorios desde la ficha de seguimiento de cada alumno.', view:'dashboard'},
+    {icono:'award', titulo:'Calificaciones', texto:'Consultá notas por rotación, promedios y nota final.', view:'grades'},
+  ],
+  seccion: [
+    {icono:'clock', titulo:'Mi semana (Inicio)', texto:'Tu pantalla principal: un resumen de tus alumnos asignados y lo que tenés pendiente de revisar esta semana.', view:'teacherHome'},
+    {icono:'users', titulo:'Alumnos asignados', texto:'Los alumnos que están (o pasaron) por tu sección — solo los tuyos, no los de todo el FAT.', view:'students'},
+    {icono:'file', titulo:'Planilla Digital FAT', texto:'Cargás asistencia, actividades realizadas, calificación (E/MB/B/R/M) y observaciones de cada alumno en tu sección.', view:'planillas'},
+    {icono:'edit', titulo:'Planillas del Alumno', texto:'Revisás la bitácora diaria que cargan tus alumnos: aprobás, devolvés con observaciones o rechazás.', view:'registros'},
+    {icono:'book', titulo:'Lineamientos', texto:'Consultá los lineamientos generales, el Objetivo General y los objetivos semanales que vos u otros docentes hayan asignado.', view:'guidelines'},
+  ],
+  alumno: [
+    {icono:'grid', titulo:'Inicio', texto:'Tu sección actual (se actualiza sola según el cronograma), el profesor a cargo y tus objetivos de esta semana.'},
+    {icono:'checkCircle', titulo:'Seguimiento semanal', texto:'Marcá si leíste el contenido de la semana y si realizaste la actividad solicitada.'},
+    {icono:'upload', titulo:'Subir documento', texto:'Adjuntá el archivo de esta semana (PDF, Word o Excel) desde la misma pantalla de inicio.'},
+    {icono:'edit', titulo:'Observaciones', texto:'Dejá cualquier comentario sobre cómo viene esa semana antes de guardar tu respuesta.'},
+    {icono:'check', titulo:'Guardar respuesta semanal', texto:'Un solo botón guarda todo: lectura, actividad, documento y observaciones.'},
+    {icono:'file', titulo:'Planilla diaria', texto:'Además del seguimiento semanal, podés completar tu planilla de cada día con actividades y fotos, o subir una ya hecha en PDF, Word o imagen.'},
+    {icono:'award', titulo:'Seguimiento personal', texto:'Desde "Mis Planillas" vas viendo el estado de cada planilla diaria: enviada, en revisión, corregida o aprobada.'},
+  ],
+};
+GUIA_TOPICS.coordinador = GUIA_TOPICS.admin.filter(t=>['dashboard','students','sections','rotations','grades','pendientes','guidelines','reports','cronograma','registros'].includes(t.view));
+
+function guiaTituloRol(role){
+  return {admin:'Guía para Administrador', viewadmin:'Guía para VIEW ADMIN', seccion:'Guía para Profesor MEP', coordinador:'Guía para Coordinador FAT', alumno:'Guía para Alumnos'}[role] || 'Guía de uso';
+}
+
 function renderNotifPanel(notifs){
   return `
   <div style="position:absolute; right:24px; top:58px; width:340px; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); z-index:30; max-height:420px; overflow-y:auto;">
@@ -1515,6 +1637,7 @@ function renderView(){
     case 'documentos': return (session.role==='admin'||session.role==='viewadmin') ? renderDocumentos() : renderDashboard();
     case 'usuarios': return session.role==='admin' ? renderGestionUsuarios() : renderDashboard();
     case 'config': return (session.role==='admin'||session.role==='viewadmin') ? renderConfig() : renderDashboard();
+    case 'ayuda': return renderAyuda();
     default: return renderDashboard();
   }
 }
@@ -3490,6 +3613,30 @@ function documentoFormHtml(){
 }
 
 
+function renderAyuda(){
+  const topics = GUIA_TOPICS[session.role] || [];
+  return `
+  <div class="page-head">
+    <div><h1 class="page-title">❓ Ayuda</h1><p class="page-sub">${guiaTituloRol(session.role)}</p></div>
+    <button class="btn btn-primary" data-action="ver-guia-de-nuevo">${icon('refresh','icon-sm')} Ver guía nuevamente</button>
+  </div>
+  ${session.role==='viewadmin'? `
+  <div class="card" style="border-color:var(--amber-soft); background:var(--amber-soft); margin-bottom:18px;">
+    <div style="display:flex; gap:10px; align-items:center;"><span style="color:var(--amber-2);">${icon('alertTriangle','icon-sm')}</span><div style="font-weight:700; font-size:13px; color:var(--amber-2);">Tu cuenta es de SOLO LECTURA — podés consultar todo lo que aparece acá, pero no crear, editar, eliminar ni calificar nada.</div></div>
+  </div>` : ''}
+  <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));">
+    ${topics.map(t=>`
+      <div class="card${t.view?' clickable':''}" ${t.view?`data-action="ayuda-ir" data-view="${t.view}" style="cursor:pointer;"`:''}>
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+          <div class="stat-icon" style="background:var(--accent-soft); color:var(--accent-2);">${icon(t.icono,'icon-sm')}</div>
+          <div style="font-weight:700; font-size:14px;">${esc(t.titulo)}</div>
+        </div>
+        <p class="cell-muted" style="font-size:12.5px; line-height:1.6;">${esc(t.texto)}</p>
+      </div>`).join('')}
+  </div>
+  `;
+}
+
 function renderConfig(){
   const c = DB.config;
   const groups = DB.groups || [];
@@ -3876,8 +4023,8 @@ function render(){
   const app = document.getElementById('app');
   document.documentElement.setAttribute('data-theme', ui.theme);
   if(!session){ app.innerHTML = renderLogin(); attachLoginEvents(); return; }
-  if(session.role==='alumno'){ app.innerHTML = renderStudentPortalPage(); attachGlobalEvents(); return; }
-  app.innerHTML = renderShell();
+  if(session.role==='alumno'){ app.innerHTML = renderStudentPortalPage() + renderTourOverlay(); attachGlobalEvents(); return; }
+  app.innerHTML = renderShell() + renderTourOverlay();
   attachGlobalEvents();
   restoreCronScroll();
 }
@@ -4044,6 +4191,7 @@ function attachGlobalEvents(){
       ui.spView='historial'; RD_LIST=null; render();
       loadMisPlanillas().then(render).catch(e=> toast(e.message||'No se pudo cargar el historial','red'));
     }
+    else if(action==='sp-open-ayuda'){ ui.spView='ayuda'; render(); }
     else if(action==='sp-open-planilla-historial'){
       ui.rdFecha = t.getAttribute('data-fecha'); ui.spView='registro'; RD=null; render();
       openRegistroDiario(ui.rdFecha).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
@@ -4429,6 +4577,11 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{ try{ await apiFetch('DELETE','/api/comunicados/'+id); await loadDB(['comunicados']); toast('Lineamiento eliminado'); }catch(e){ toast(e.message||'Error','red'); } }
       });
     }
+    else if(action==='ayuda-ir'){ ui.view = t.getAttribute('data-view'); render(); }
+    else if(action==='ver-guia-de-nuevo'){ tourStep = 0; render(); }
+    else if(action==='tour-next'){ tourStep = (tourStep||0)+1; render(); }
+    else if(action==='tour-back'){ tourStep = Math.max(0,(tourStep||0)-1); render(); }
+    else if(action==='tour-skip'){ marcarTourVisto(); tourStep = null; render(); }
     else if(action==='cron-ir-semana-actual'){ scrollCronogramaASemana(semanaActualCronograma(), true); }
     else if(action==='cronograma-tab'){ ui.cronogramaTab = t.getAttribute('data-tab'); render(); }
     else if(action==='act-cal-nav'){ ui.actCalMes = actAddMonths(ui.actCalMes, t.getAttribute('data-dir')==='next'?1:-1); render(); }
@@ -5171,7 +5324,7 @@ async function init(){
       else{
         await loadDB();
         ui.view = session.role==='seccion' ? 'teacherHome' : 'dashboard';
-        const vistasRestaurables = ['dashboard','teacherHome','students','sections','rotations','grades','guidelines','reports','pendientes','cronograma','planillas','documentos','usuarios','config'];
+        const vistasRestaurables = ['dashboard','teacherHome','students','sections','rotations','grades','guidelines','reports','pendientes','cronograma','planillas','documentos','usuarios','config','registros','ayuda'];
         try{
           const ultimaVista = localStorage.getItem('fat_last_view');
           if(ultimaVista && vistasRestaurables.includes(ultimaVista)) ui.view = ultimaVista;
@@ -5183,6 +5336,7 @@ async function init(){
         if(ui.view==='usuarios') loadUsuarios().catch(()=>{}).then(render);
       }
       if(session.role==='seccion' || session.role==='alumno'){ loadMyDocumentos().then(render).catch(()=>{}); }
+      maybeStartTour();
     }catch(e){
       console.error('No se pudo restaurar la sesión', e);
       authToken=null; session=null;
