@@ -2,6 +2,8 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
@@ -9,7 +11,17 @@ const cloudinary = require('cloudinary').v2;
 const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, AlignmentType, WidthType, BorderStyle, ShadingType } = require('docx');
 const { db, uid, todayISO, logActivity, getActivityLog, getSectionsOrdered, recomputeTotalWeeks, generateRotationsFor, ensureSeed } = require('./db');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fat-manager-dev-secret-change-in-production';
+// JWT_SECRET es obligatorio: NUNCA usar un valor por defecto acá. Si faltara y el servidor
+// arrancara igual con un secreto "de muestra", cualquiera que conociera ese valor (por ejemplo,
+// por estar en un repo público o en un historial de chat) podría fabricar tokens válidos de
+// cualquier rol, incluido admin, sin loguearse. Preferimos que el server directamente no arranque.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 20) {
+  console.error('[server] Falta configurar la variable de entorno JWT_SECRET (o es demasiado corta/insegura).');
+  console.error('[server] En Render: Environment → agregá JWT_SECRET con un valor largo y random (32+ caracteres).');
+  console.error('[server] Podés generar uno con: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"');
+  process.exit(1);
+}
 const PORT = process.env.PORT || 3001;
 
 cloudinary.config({
@@ -21,9 +33,39 @@ const CLOUDINARY_READY = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLO
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB
 
 const app = express();
-app.use(cors());
+app.use(helmet({
+  // El frontend es una sola página HTML con estilos/scripts inline (no un sitio de terceros
+  // embebiendo cosas), así que dejamos crossOriginResourcePolicy abierto para no romper la
+  // carga de imágenes/archivos subidos a Cloudinary. El resto de los headers de helmet
+  // (X-Frame-Options, X-Content-Type-Options, HSTS, etc.) quedan con sus valores seguros por defecto.
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false // la app usa estilos/scripts inline; una CSP estricta la rompería sin un trabajo aparte de reescritura
+}));
+
+// CORS: el frontend se sirve desde el mismo origen que la API (Express sirve el HTML), así que
+// no hace falta permitir orígenes cruzados por defecto. Si en algún momento necesitás pegarle a
+// esta API desde otro dominio (por ejemplo una app aparte), agregá ALLOWED_ORIGINS en Render
+// con los dominios separados por coma.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : { origin: false }));
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Límite general: protege contra abuso/scraping automatizado sin molestar el uso normal
+// (generoso a propósito, porque el propio frontend ya optimiza sus lecturas).
+app.use('/api/', rateLimit({
+  windowMs: 15 * 60 * 1000, max: 600,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes. Probá de nuevo en unos minutos.' }
+}));
+// Límite específico y más estricto para login, para frenar fuerza bruta de contraseñas.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 20,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Demasiados intentos de inicio de sesión. Probá de nuevo en unos minutos.' }
+});
+
 
 function h(fn) {
   return (req, res) => fn(req, res).catch(err => {
@@ -62,7 +104,7 @@ async function allDocs(collection) {
 }
 
 /* ---------------------------- auth routes ---------------------------- */
-app.post('/api/auth/login', h(async (req, res) => {
+app.post('/api/auth/login', loginLimiter, h(async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
   const matches = await whereEquals('users', 'username', username.trim());
@@ -943,7 +985,16 @@ app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
 
   const rotationsRaw = await whereEquals('rotations', 'studentId', studentId);
   const rotations = rotationsRaw.slice().sort((a, b) => a.orden - b.orden);
-  const current = rotations.find(r => r.status === 'en_curso') || rotations.find(r => r.status !== 'finalizada') || rotations[rotations.length - 1];
+  // Fuente única de verdad: la fecha de hoy contra el cronograma (startDate/endDate de cada rotación),
+  // nunca un campo "status" cargado a mano — así "Tu Sección Actual" nunca queda desactualizada.
+  const today = todayISO();
+  let current = rotations.find(r => today >= r.startDate && today <= r.endDate);
+  if (!current) {
+    // Vacío entre dos rotaciones (o fuera de rango): la última que ya arrancó, si no la próxima, si no la última cargada.
+    current = rotations.filter(r => r.startDate <= today).sort((a, b) => b.startDate.localeCompare(a.startDate))[0]
+      || rotations.find(r => r.startDate > today)
+      || rotations[rotations.length - 1];
+  }
 
   const cfgSnap = await db.collection('config').doc('main').get();
   const config = cfgSnap.data();
@@ -1316,7 +1367,8 @@ app.get('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, r
 
     const group = student.groupId ? await docData('groups', student.groupId) : null;
     const rotationsRaw = await whereEquals('rotations', 'studentId', studentId);
-    const current = rotationsRaw.find(r => r.status === 'en_curso') || null;
+    const todayForRot = todayISO();
+    const current = rotationsRaw.find(r => todayForRot >= r.startDate && todayForRot <= r.endDate) || null;
     const secciones = (await allDocs('sections')).map(s => ({ id: s.id, nombre: s.nombre }));
     const sectionIdParaObjetivo = registro ? registro.sectionId : (current ? current.sectionId : null);
     const objetivosSemanales = await objetivosSemanalesParaAlumno(student, sectionIdParaObjetivo);
