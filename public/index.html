@@ -471,6 +471,8 @@ let RD = null; // Registro Diario (Panel del Alumno): planilla del día abierta 
 let RD_LIST = null; // "Mis Planillas": historial del alumno
 let RD_ADMIN_LIST = null; // listado de registros diarios para el Panel del Docente
 let RD_TRASH = null; // papelera de registros diarios (solo admin)
+let SEGUIMIENTO_LIST = null; // listado de "Seguimiento de Alumnos" en el Dashboard
+let SEGUIMIENTO_DETALLE = null; // ficha de seguimiento del alumno seleccionado
 let RD_SUGERIDO_TMP = null; // datos sugeridos mientras el alumno elige el modo (formulario vs archivo), antes de crear el registro
 let NOTIFICACIONES = null; // notificaciones del alumno (aprobación/rechazo/corrección)
 let rdSaveTimer = null;
@@ -480,7 +482,8 @@ let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, m
   page:{ students:1, rotations:1, documentosAlumno:1 },
   sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
   cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7), cronogramaTab:'semanal',
-  spView:'home', rdFecha:todayISO(), rdFilters:{}, rdSort:{key:'fecha',dir:'desc'}, spNotifOpen:false, rdSelected:{}, rdShowTrash:false };
+  spView:'home', rdFecha:todayISO(), rdFilters:{}, rdSort:{key:'fecha',dir:'desc'}, spNotifOpen:false, rdSelected:{}, rdShowTrash:false,
+  segFilters:{} };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -707,6 +710,20 @@ async function loadRegistrosAdmin(){
 async function loadRegistrosTrash(){
   const data = await apiFetch('GET', '/api/registros?papelera=1');
   RD_TRASH = data.registros;
+}
+async function loadSeguimientoList(){
+  const f = ui.segFilters;
+  const params = new URLSearchParams();
+  if(f.q) params.set('q', f.q);
+  if(f.curso) params.set('curso', f.curso);
+  if(f.groupId) params.set('groupId', f.groupId);
+  if(f.sectionId) params.set('sectionId', f.sectionId);
+  const qs = params.toString();
+  const data = await apiFetch('GET', '/api/seguimiento'+(qs?'?'+qs:''));
+  SEGUIMIENTO_LIST = data.alumnos;
+}
+async function loadSeguimientoDetalle(studentId){
+  SEGUIMIENTO_DETALLE = await apiFetch('GET', '/api/seguimiento/'+studentId);
 }
 async function exportRegistroPDF(r){
   try{ await loadJsPDF(); }catch(e){ toast('No se pudo cargar el generador de PDF','red'); return; }
@@ -1459,6 +1476,7 @@ function renderNotifPanel(notifs){
 function renderView(){
   switch(ui.view){
     case 'dashboard': return renderDashboard();
+    case 'seguimiento-detalle': return renderSeguimientoDetalle();
     case 'teacherHome': return renderTeacherHome();
     case 'students': return renderStudents();
     case 'student-detail': return renderStudentDetail();
@@ -1596,16 +1614,32 @@ function renderDashboard(){
   });
   const maxCount = Math.max(1, ...bySection.map(b=>b.count));
 
+  // Indicadores generales de seguimiento — calculados de datos que ya existen (pendientes, students, rotations).
+  const pend = DB.pendientes || [];
+  const alumnosFinalizados = DB.students.filter(s=>s.estado==='finalizado').length;
+  const alumnosConPendientes = new Set(pend.filter(p=>p.estado!=='completado').map(p=>p.studentId)).size;
+  const alumnosConRecuperatorioProgramado = new Set(pend.filter(p=>p.estado==='en_recuperacion').map(p=>p.studentId)).size;
+  const alumnosQueRecuperaron = new Set(pend.filter(p=>p.recuperatorio && p.recuperatorio.estadoRecuperacion==='recuperado').map(p=>p.studentId)).size;
+  const promediosValidos = DB.students.map(s=>Number(studentAvg(s.id))).filter(n=>!isNaN(n) && n>0);
+  const promedioGeneral = promediosValidos.length? (promediosValidos.reduce((a,b)=>a+b,0)/promediosValidos.length).toFixed(1) : '—';
+  const alumnosConNotaFinal = DB.students.filter(s=>s.notaFinal).length;
+
   return `
   <div class="page-head">
     <div><h1 class="page-title">Dashboard</h1><p class="page-sub">Semana ${Math.max(1,...activos.map(s=>currentWeekOf(s)),1)} en curso · ${roleLabel(session.role)}</p></div>
   </div>
   <div class="grid-cards">
-    ${statCard('Alumnos', totalAlumnos, activos.length+' activos', 'users', 'accent')}
+    ${statCard('Alumnos', totalAlumnos, activos.length+' en curso', 'users', 'accent')}
     ${statCard('Profesores', totalProfesores, 'en '+DB.sections.length+' secciones', 'user', 'accent')}
     ${statCard('Rotaciones activas', enCurso, 'en curso ahora mismo', 'refresh', 'accent')}
     ${statCard('Informes pendientes', informesPend, 'semanales y finales', 'file', informesPend?'amber':'neutral')}
     ${statCard('Calificaciones pendientes', notasPend, 'rotaciones sin nota', 'award', notasPend?'red':'neutral')}
+    ${statCard('Alumnos finalizados', alumnosFinalizados, 'de '+totalAlumnos+' totales', 'checkCircle', 'green')}
+    ${statCard('Con contenidos pendientes', alumnosConPendientes, 'alumnos con algo sin completar', 'alertTriangle', alumnosConPendientes?'amber':'neutral')}
+    ${statCard('Recuperatorios programados', alumnosConRecuperatorioProgramado, 'alumnos en recuperación', 'clock', alumnosConRecuperatorioProgramado?'accent':'neutral')}
+    ${statCard('Recuperaron contenidos', alumnosQueRecuperaron, 'alumnos', 'checkCircle', 'green')}
+    ${statCard('Promedio general', promedioGeneral, 'de todos los alumnos', 'award', 'accent')}
+    ${statCard('Con nota final', alumnosConNotaFinal, 'de '+totalAlumnos+' totales', 'checkCircle', 'neutral')}
   </div>
 
   <div class="dash-grid2" style="display:grid; grid-template-columns:1.4fr 1fr; gap:16px;">
@@ -1625,6 +1659,8 @@ function renderDashboard(){
     </div>
   </div>
 
+  ${renderSeguimientoSection()}
+
   <div class="section-card" style="margin-top:16px;">
     <h3>Actividad reciente</h3>
     ${(DB.activityLog&&DB.activityLog.length)? DB.activityLog.slice(0,6).map(a=>`
@@ -1635,6 +1671,152 @@ function renderDashboard(){
   </div>
   <style>@media(max-width:880px){.dash-grid2{grid-template-columns:1fr !important;}}</style>
   `;
+}
+
+/* ---------------------------- Seguimiento de Alumnos (embebido en el Dashboard) ---------------------------- */
+let seguimientoLoading = false;
+function renderSeguimientoSection(){
+  if(SEGUIMIENTO_LIST===null && !seguimientoLoading){
+    seguimientoLoading = true;
+    loadSeguimientoList().then(()=>{ seguimientoLoading=false; render(); }).catch(e=>{ seguimientoLoading=false; toast(e.message||'No se pudo cargar el seguimiento','red'); });
+  }
+  const f = ui.segFilters;
+  const cursos = [...new Set(DB.students.map(s=>s.curso))];
+  const list = SEGUIMIENTO_LIST || [];
+  return `
+  <div class="section-card" style="margin-top:16px;">
+    <h3>Seguimiento de Alumnos</h3>
+    <div class="filters-row">
+      <input class="input" id="seg-search" placeholder="Buscar por nombre, apellido o legajo…" value="${esc(f.q||'')}" style="min-width:220px;">
+      <select class="select" data-action="filter-seg-curso"><option value="">Todos los cursos</option>${cursos.map(c=>`<option value="${esc(c)}" ${f.curso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
+      <select class="select" data-action="filter-seg-grupo"><option value="">Todos los grupos</option>${(DB.groups||[]).map(g=>`<option value="${g.id}" ${f.groupId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select>
+      <select class="select" data-action="filter-seg-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${f.sectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+    </div>
+    ${SEGUIMIENTO_LIST===null? `<div class="empty-state" style="padding:24px;"><span class="spinner spinner-accent"></span></div>` : `
+    <div class="table-wrap" style="box-shadow:none;">
+    <table>
+      <thead><tr><th>Legajo</th><th>Alumno</th><th>Curso</th><th>Grupo</th><th>Sección actual</th><th>Estado</th></tr></thead>
+      <tbody>
+      ${list.length? list.map(a=>`
+        <tr class="clickable" data-action="open-seguimiento" data-id="${a.id}">
+          <td class="cell-muted">${esc(a.legajo)}</td>
+          <td class="cell-strong">${esc(a.nombre)} ${esc(a.apellido)}</td>
+          <td>${esc(a.curso)} "${esc(a.division)}"</td>
+          <td>${esc(a.grupo||'—')}</td>
+          <td>${esc(a.seccionActual||'—')}</td>
+          <td>${estadoBadge(a.estado)}</td>
+        </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">No se encontraron alumnos</div></td></tr>`}
+      </tbody>
+    </table>
+    </div>`}
+  </div>
+  `;
+}
+
+const SEMANA_ESTADO_MAP = {
+  completada: ['green','Completada','check'], en_curso: ['amber','En curso','clock'],
+  con_pendiente: ['red','Con contenido pendiente','alertTriangle'], recuperada: ['accent','Recuperada','checkCircle'],
+  futura: ['neutral','Todavía no llega','calendar']
+};
+function renderSeguimientoDetalle(){
+  const d = SEGUIMIENTO_DETALLE;
+  if(!d) return `<div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>`;
+  const readOnly = session.role==='viewadmin';
+  const s = d.student;
+  return `
+  <div class="page-head">
+    <div>
+      <button class="btn btn-ghost btn-sm" data-action="back-seguimiento" style="margin-bottom:8px;">← Volver al Dashboard</button>
+      <h1 class="page-title">${esc(s.nombre)} ${esc(s.apellido)}</h1>
+      <p class="page-sub">Legajo ${esc(s.legajo)} · ${esc(d.curso)} "${esc(d.division)}" · Grupo ${esc(d.grupo||'—')}</p>
+    </div>
+  </div>
+
+  <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
+    <div class="card"><div class="stat-label">Sección actual</div><div class="stat-value" style="font-size:17px;">${esc(d.seccionActual||'—')}</div><div class="stat-foot">${esc(d.profesorMEP||'')}</div></div>
+    <div class="card"><div class="stat-label">Semanas cursadas</div><div class="stat-value">${d.resumen.semanasCursadas} / ${d.totalWeeks}</div></div>
+    <div class="card"><div class="stat-label">Avance</div><div class="stat-value">${d.resumen.porcentajeAvance}%</div></div>
+    <div class="card"><div class="stat-label">Contenidos pendientes</div><div class="stat-value" style="color:${d.resumen.contenidosPendientes?'var(--red-2)':'inherit'};">${d.resumen.contenidosPendientes}</div></div>
+    <div class="card"><div class="stat-label">Recuperatorios</div><div class="stat-value">${d.resumen.recuperatoriosRecuperados} / ${d.resumen.cantidadRecuperatorios}</div><div class="stat-foot">recuperados</div></div>
+  </div>
+
+  <div class="section-card">
+    <h3>Recorrido semanal (${d.resumen.semanasCompletadas} de ${d.totalWeeks} completadas)</h3>
+    <div class="bar-track" style="height:10px; margin-bottom:12px;"><div class="bar-fill" style="width:${d.resumen.porcentajeAvance}%;"></div></div>
+    <div style="display:flex; gap:6px; overflow-x:auto; padding-bottom:8px;">
+      ${d.semanas.map(sem=>{
+        const [color,label,ic] = SEMANA_ESTADO_MAP[sem.estado];
+        return `<div title="Semana ${sem.numero}: ${label}${sem.sectionNombre?' · '+esc(sem.sectionNombre):''}" style="flex:0 0 auto; width:34px; height:34px; border-radius:50%; background:var(--${color}${color==='neutral'?'':'-soft'}); color:var(--${color}${color==='neutral'?'-3':'-2'}); display:flex; align-items:center; justify-content:center; font-size:10.5px; font-weight:700; border:1.5px solid var(--${color==='neutral'?'border':color+'-soft'});">${sem.numero}</div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-size:11.5px; color:var(--text-3);">
+      <span>🟢 Completada</span><span>🟡 En curso</span><span>🔴 Con pendiente</span><span>🔵 Recuperada</span><span>⚪ Todavía no llega</span>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h3>Contenidos y Actividades</h3>
+    ${d.contenidosPorSemana.length? `<div class="table-wrap" style="box-shadow:none;"><table>
+      <thead><tr><th>Semana</th><th>Sección</th><th>Estado</th><th>Documento</th></tr></thead>
+      <tbody>${d.contenidosPorSemana.map(c=>`
+        <tr><td class="cell-strong">Semana ${c.semana}</td><td>${esc(c.sectionNombre||'—')}</td>
+        <td>${c.estado==='completado'?'<span class="badge badge-green">Completado</span>':c.estado==='en_proceso'?'<span class="badge badge-amber">En proceso</span>':'<span class="badge badge-neutral">Pendiente</span>'}</td>
+        <td>${c.documentoId? `<button class="btn btn-sm" data-action="download-documento" data-id="${c.documentoId}">${icon('download','icon-sm')} Ver</button>` : '<span class="cell-muted">—</span>'}</td></tr>`).join('')}</tbody>
+    </table></div>` : `<div class="empty-state" style="padding:20px;">Sin respuestas semanales cargadas todavía.</div>`}
+  </div>
+
+  <div class="section-card">
+    <h3>Contenidos Pendientes ${(!readOnly)? `<button class="btn btn-sm" data-action="new-pendiente" style="margin-left:auto;">${icon('plus','icon-sm')} Registrar pendiente</button>`:''}</h3>
+    ${d.pendientes.length? d.pendientes.map(p=>`
+      <div style="border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+          <div>
+            <div class="cell-strong" style="font-size:13px;">${esc(p.contenido||p.motivo)}${p.semana?' · Semana '+p.semana:''}</div>
+            <div class="cell-muted" style="font-size:11.5px; margin-top:2px;">${esc(p.sectionNombre||'—')} · ${esc(p.teacherNombre||'—')} · ${p.createdAt?fmtDate(p.createdAt.slice(0,10)):''}</div>
+          </div>
+          ${segPendienteEstadoBadge(p.estado)}
+        </div>
+        ${p.motivo && p.contenido? `<p class="cell-muted" style="font-size:12px; margin-top:6px;">Motivo: ${esc(p.motivo)}</p>`:''}
+        ${p.recuperatorio? `
+        <div style="margin-top:8px; padding:9px 11px; background:var(--surface-2); border-radius:var(--r-sm); font-size:12px;">
+          <strong>Recuperatorio</strong> — ${recuperacionEstadoBadge(p.recuperatorio.estadoRecuperacion)}
+          ${p.recuperatorio.fechaRecuperatorio? ` · ${fmtDate(p.recuperatorio.fechaRecuperatorio)}`:''}
+          ${p.recuperatorio.resultado? `<div style="margin-top:4px;"><strong>Resultado:</strong> ${esc(p.recuperatorio.resultado)}</div>`:''}
+          ${p.recuperatorio.observaciones? `<div style="margin-top:2px;">${esc(p.recuperatorio.observaciones)}</div>`:''}
+        </div>`:''}
+        ${(!readOnly)? `<button class="btn btn-sm" style="margin-top:8px;" data-action="registrar-recuperatorio" data-id="${p.id}">${icon('edit','icon-sm')} ${p.recuperatorio?'Editar':'Registrar'} recuperatorio</button>`:''}
+      </div>`).join('') : `<div class="empty-state" style="padding:20px;">Sin contenidos pendientes.</div>`}
+  </div>
+
+  <div class="section-card">
+    <h3>Calificaciones</h3>
+    ${d.calificaciones.length? `<div class="table-wrap" style="box-shadow:none;"><table>
+      <thead><tr><th>Fecha</th><th>Sección</th><th>Profesor MEP</th><th>Calificación</th><th>Observaciones</th></tr></thead>
+      <tbody>${d.calificaciones.map(c=>`<tr><td class="cell-muted">${fmtDate(c.fecha)}</td><td>${esc(c.sectionNombre||'—')}</td><td>${esc(c.teacherNombre||'—')}</td><td>${c.calificacion?`<span class="badge badge-accent">${CALIFICACION_LABELS[c.calificacion]||c.calificacion}</span>`:'<span class="cell-muted">Sin cargar</span>'}</td><td class="cell-muted">${esc(c.observaciones||'—')}</td></tr>`).join('')}</tbody>
+    </table></div>` : `<div class="empty-state" style="padding:20px;">Sin calificaciones cargadas todavía.</div>`}
+  </div>
+
+  <div class="section-card">
+    <h3>Nota Final</h3>
+    ${readOnly? `<div class="stat-value">${esc(s.notaFinal||'Sin cargar')}</div>` : `
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <input class="input" id="seg-nota-final" value="${esc(s.notaFinal||'')}" placeholder="Ej: 8, Aprobado, MB…" style="max-width:220px;">
+      <button class="btn btn-primary btn-sm" data-action="guardar-nota-final" data-id="${s.id}">${icon('check','icon-sm')} Guardar</button>
+    </div>
+    <p class="help-text">No hay una fórmula automática definida para combinar las calificaciones en una nota final — se carga manualmente acá.</p>
+    `}
+  </div>
+  `;
+}
+function segPendienteEstadoBadge(estado){
+  const map = {pendiente:['red','Pendiente'], en_recuperacion:['amber','En recuperación'], completado:['green','Completado'], no_recuperado:['red','No recuperado']};
+  const [c,l] = map[estado]||['neutral',estado];
+  return `<span class="badge badge-${c}">${l}</span>`;
+}
+function recuperacionEstadoBadge(estado){
+  const map = {programado:['amber','Recuperatorio programado'], recuperado:['green','Recuperado'], no_recuperado:['red','No recuperado']};
+  const [c,l] = map[estado]||['neutral',estado];
+  return `<span class="badge badge-${c}">${l}</span>`;
 }
 
 /* ---------------------------- STUDENTS LIST ---------------------------- */
@@ -2076,6 +2258,29 @@ function renderGuidelines(){
     ${consignas.length? `<ul class="mono-list">${consignas.map(cn=>`<li><span>${esc(cn.texto)}</span>${canEdit?`<span class="tag-remove" data-action="del-consigna" data-id="${cn.id}">${icon('x','icon-sm')}</span>`:''}</li>`).join('')}</ul>` : `<div class="empty-state">Sin consignas cargadas</div>`}
   </div>
   ${renderComunicadosSection()}`;
+}
+
+function recuperatorioFormHtml(p){
+  p = p||{};
+  const rec = p.recuperatorio||{};
+  return `
+  <div class="kv" style="margin-bottom:12px;">
+    <dt>Contenido</dt><dd>${esc(p.contenido||p.motivo||'—')}</dd>
+    <dt>Semana</dt><dd>${p.semana||'—'}</dd>
+  </div>
+  <div class="field"><label for="f-rec-estado">Estado del recuperatorio</label>
+    <select class="select" id="f-rec-estado" style="width:100%;">
+      <option value="programado" ${rec.estadoRecuperacion==='programado'?'selected':''}>Recuperatorio programado</option>
+      <option value="recuperado" ${rec.estadoRecuperacion==='recuperado'?'selected':''}>Recuperado</option>
+      <option value="no_recuperado" ${rec.estadoRecuperacion==='no_recuperado'?'selected':''}>No recuperado</option>
+    </select>
+  </div>
+  <div class="field"><label for="f-rec-fecha">Fecha del recuperatorio</label><input class="input" type="date" id="f-rec-fecha" value="${rec.fechaRecuperatorio||todayISO()}"></div>
+  <div class="field"><label for="f-rec-contenido">Contenido recuperado</label><textarea class="input" id="f-rec-contenido" style="min-height:60px;">${esc(rec.contenidoRecuperado||'')}</textarea></div>
+  <div class="field"><label for="f-rec-actividad">Actividad realizada</label><textarea class="input" id="f-rec-actividad" style="min-height:60px;">${esc(rec.actividadRealizada||'')}</textarea></div>
+  <div class="field"><label for="f-rec-resultado">Resultado</label><input class="input" id="f-rec-resultado" value="${esc(rec.resultado||'')}"></div>
+  <div class="field"><label for="f-rec-observaciones">Observaciones</label><textarea class="input" id="f-rec-observaciones" style="min-height:60px;">${esc(rec.observaciones||'')}</textarea></div>
+  `;
 }
 
 function objetivoGeneralFormHtml(){
@@ -3285,6 +3490,7 @@ function renderModal(){
   else if(m.type==='consigna-form'){ title='Nueva consigna'; body = `<div class="field"><label for="f-consigna">Texto</label><textarea class="input" id="f-consigna"></textarea></div>`; }
   else if(m.type==='objetivo-semanal-form'){ title='Nuevo objetivo semanal'; wide=true; body = objetivoSemanalFormHtml(); }
   else if(m.type==='objetivo-general-form'){ title='Objetivo General del establecimiento'; body = objetivoGeneralFormHtml(); }
+  else if(m.type==='recuperatorio-form'){ title='Registrar recuperatorio'; body = recuperatorioFormHtml(m.data); }
   else if(m.type==='pendiente-form'){ title='Nuevo contenido pendiente'; body = pendienteFormHtml(); }
   else if(m.type==='quick-week-form'){ title='Cargar semana'; body = quickWeekFormHtml(m.data); }
   else if(m.type==='documento-form'){ title='Subir documento'; body = documentoFormHtml(); }
@@ -3630,6 +3836,18 @@ function attachGlobalEvents(){
   const docSearch = document.getElementById('doc-search');
   if(docSearch){
     docSearch.addEventListener('input', e=>{ ui.docSearch = e.target.value; ui.page.documentosAlumno=1; render(); document.getElementById('doc-search').focus(); document.getElementById('doc-search').setSelectionRange(999,999); });
+  }
+
+  const segSearch = document.getElementById('seg-search');
+  if(segSearch){
+    segSearch.addEventListener('input', e=>{
+      ui.segFilters.q = e.target.value;
+      clearTimeout(window._segSearchTimer);
+      window._segSearchTimer = setTimeout(async ()=>{
+        await loadSeguimientoList(); render();
+        const el = document.getElementById('seg-search'); if(el){ el.focus(); el.setSelectionRange(999,999); }
+      }, 400);
+    });
   }
 
   if(globalEventsAttached) return; // el #app persiste entre renders (solo cambia su innerHTML);
@@ -4051,6 +4269,25 @@ function attachGlobalEvents(){
       try{ RD = await apiFetch('GET','/api/registros/'+id); render(); }
       catch(e){ toast(e.message||'No se pudo cargar la planilla','red'); ui.view='registros'; render(); }
     }
+    else if(action==='open-seguimiento'){
+      ui.view='seguimiento-detalle'; SEGUIMIENTO_DETALLE=null; render();
+      try{ await loadSeguimientoDetalle(id); render(); }
+      catch(e){ toast(e.message||'No se pudo cargar el seguimiento','red'); ui.view='dashboard'; render(); }
+    }
+    else if(action==='back-seguimiento'){ ui.view='dashboard'; SEGUIMIENTO_DETALLE=null; render(); }
+    else if(action==='registrar-recuperatorio'){
+      const p = (SEGUIMIENTO_DETALLE.pendientes||[]).find(x=>x.id===id);
+      ui.modal = {type:'recuperatorio-form', data:p}; render();
+    }
+    else if(action==='guardar-nota-final'){
+      const notaFinal = document.getElementById('seg-nota-final').value.trim();
+      try{
+        await apiFetch('PUT', '/api/students/'+id+'/nota-final', { notaFinal });
+        await loadSeguimientoDetalle(id);
+        await loadDB(['students']);
+        render(); toast('Nota final guardada');
+      }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
+    }
     else if(action==='add-asistencia'){
       const fecha = document.getElementById('f-asis-fecha').value;
       const estado = document.getElementById('f-asis-estado').value;
@@ -4227,6 +4464,9 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="filter-rd-seccion"]')){ ui.rdFilters.sectionId = t.value; await loadRegistrosAdmin(); render(); }
     else if(t.matches('[data-action="filter-rd-fecha"]')){ ui.rdFilters.fecha = t.value; await loadRegistrosAdmin(); render(); }
     else if(t.matches('[data-action="filter-rd-estado"]')){ ui.rdFilters.estado = t.value; await loadRegistrosAdmin(); render(); }
+    else if(t.matches('[data-action="filter-seg-curso"]')){ ui.segFilters.curso = t.value; await loadSeguimientoList(); render(); }
+    else if(t.matches('[data-action="filter-seg-grupo"]')){ ui.segFilters.groupId = t.value; await loadSeguimientoList(); render(); }
+    else if(t.matches('[data-action="filter-seg-seccion"]')){ ui.segFilters.sectionId = t.value; await loadSeguimientoList(); render(); }
     else if(t.matches('[data-action="cron-filtro-grupo"]')){ ui.cronFiltroGrupo = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-seccion"]')){ ui.cronFiltroSeccion = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-curso"]')){ ui.cronFiltroCurso = t.value; render(); }
@@ -4662,7 +4902,20 @@ async function submitModal(action, type, id){
       const semana = val('f-pend-semana'); const motivo = val('f-pend-motivo'); const contenido = val('f-pend-contenido');
       if(!studentId || !sectionId || !motivo){ toast('Completá alumno, sección y motivo','red'); return; }
       await apiFetch('POST', '/api/pendientes', { studentId, sectionId, semana: semana?Number(semana):null, motivo, contenido });
-      await loadDB(['pendientes','activityLog']); ui.modal=null; render(); toast('Registro creado');
+      await loadDB(['pendientes','activityLog']);
+      if(SEGUIMIENTO_DETALLE) await loadSeguimientoDetalle(SEGUIMIENTO_DETALLE.student.id);
+      ui.modal=null; render(); toast('Registro creado');
+    }
+    else if(type==='recuperatorio-form'){
+      const estadoRecuperacion = val('f-rec-estado'); const fechaRecuperatorio = val('f-rec-fecha');
+      const contenidoRecuperado = val('f-rec-contenido'); const actividadRealizada = val('f-rec-actividad');
+      const resultado = val('f-rec-resultado'); const observacionesRecuperatorio = val('f-rec-observaciones');
+      try{
+        await apiFetch('PUT', '/api/pendientes/'+id+'/recuperatorio', { estadoRecuperacion, fechaRecuperatorio, contenidoRecuperado, actividadRealizada, resultado, observacionesRecuperatorio });
+        if(SEGUIMIENTO_DETALLE) await loadSeguimientoDetalle(SEGUIMIENTO_DETALLE.student.id);
+        await loadDB(['pendientes','activityLog']);
+        ui.modal=null; render(); toast('Recuperatorio registrado');
+      }catch(e){ toast(e.message||'No se pudo registrar', 'red'); }
     }
     else if(type==='planilla-form'){
       const studentId = val('f-pln-alumno'); const sectionId = val('f-pln-seccion');
