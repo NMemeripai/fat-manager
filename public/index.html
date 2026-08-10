@@ -2569,17 +2569,20 @@ function renderCronogramaSemanalBody(){
     <select class="select" data-action="cron-filtro-seccion"><option value="">Todas las secciones</option>${DB.sections.map(s=>`<option value="${s.id}" ${ui.cronFiltroSeccion===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
     <select class="select" data-action="cron-filtro-curso"><option value="">Todos los cursos</option>${cursos.map(c=>`<option value="${esc(c)}" ${ui.cronFiltroCurso===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
   </div>
-  <div style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:14px;">
-    ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`
-      <div class="cron-legend-item" data-action="cron-drop-target" data-section-id="${s.id}" title="${isAdmin?'Soltá acá una rotación para reasignarla a esta sección':''}">
-        <span class="cron-legend-swatch" style="background:${sectionColor(s.id)};"></span>${esc(s.nombre)}
-      </div>`).join('')}
+  <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+    <div style="display:flex; gap:14px; flex-wrap:wrap;">
+      ${DB.sections.slice().sort((a,b)=>a.orden-b.orden).map(s=>`
+        <div class="cron-legend-item" data-action="cron-drop-target" data-section-id="${s.id}" title="${isAdmin?'Soltá acá una rotación para reasignarla a esta sección':''}">
+          <span class="cron-legend-swatch" style="background:${sectionColor(s.id)};"></span>${esc(s.nombre)}
+        </div>`).join('')}
+    </div>
+    <button class="btn btn-sm" data-action="cron-ir-semana-actual" title="Ir a la semana actual">${icon('arrowLeft','icon-sm')} Semana actual ${icon('arrowRight','icon-sm')}</button>
   </div>
-  <div class="table-wrap" style="overflow-x:auto;">
+  <div class="table-wrap" id="cron-scroll-wrap" style="overflow-x:auto;">
     <table class="cron-table">
       <thead><tr>
         <th class="cron-sticky-col">Alumno</th>
-        ${weekNumbers.map(n=>`<th>S${n}</th>`).join('')}
+        ${weekNumbers.map(n=>`<th data-week-th="${n}">S${n}</th>`).join('')}
       </tr></thead>
       <tbody>
       ${students.map(s=>{
@@ -2785,6 +2788,36 @@ function actividadDiaEditorHtml(data){
   `;
 }
 
+const EXCEPCION_TIPO_LABELS = { inasistencia:'Inasistencia', cambio_seccion:'Cambio de sección', recuperatorio:'Recuperatorio', licencia:'Licencia / permiso', otro:'Otro' };
+// Recuerda la posición horizontal del Cronograma entre renders (abrir/cerrar una rotación,
+// guardar, cancelar, etc. no deben hacerlo volver a la Semana 1).
+let cronScrollLeft = null;
+function modaSemana(nums){
+  if(!nums.length) return 1;
+  const counts = {};
+  nums.forEach(n=>{ counts[n]=(counts[n]||0)+1; });
+  return Number(Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0]);
+}
+function semanaActualCronograma(){
+  const activos = DB.students.filter(s=>s.estado==='activo').map(s=>currentWeekOf(s));
+  return activos.length ? modaSemana(activos) : 1;
+}
+function scrollCronogramaASemana(n, smooth){
+  const wrap = document.getElementById('cron-scroll-wrap');
+  const th = document.querySelector('[data-week-th="'+n+'"]');
+  if(!wrap || !th) return;
+  const target = Math.max(0, th.offsetLeft - 170);
+  if(smooth) wrap.scrollTo({ left: target, behavior:'smooth' }); else wrap.scrollLeft = target;
+  cronScrollLeft = target;
+}
+function restoreCronScroll(){
+  if(ui.view!=='cronograma' || (ui.cronogramaTab||'semanal')!=='semanal') return;
+  const wrap = document.getElementById('cron-scroll-wrap');
+  if(!wrap) return;
+  if(cronScrollLeft!=null) wrap.scrollLeft = cronScrollLeft;
+  else scrollCronogramaASemana(semanaActualCronograma(), false);
+  wrap.addEventListener('scroll', ()=>{ cronScrollLeft = wrap.scrollLeft; });
+}
 function excepcionesEnRango(studentId, desde, hasta){
   return (DB.cronogramaActividades||[]).filter(a=>a.studentId===studentId && a.fecha>=desde && a.fecha<=hasta).sort((a,b)=>a.fecha.localeCompare(b.fecha));
 }
@@ -2820,7 +2853,9 @@ function cronogramaEditFormHtml(rot){
         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border);">
           <div style="font-size:12.5px;">
             <strong>Rotación ${i+2}</strong> · ${sectionDot(e.sectionId)} ${esc(sectionName(e.sectionId))} — ${fmtDate(e.fecha)}
+            ${e.tipo? ` · <span class="badge badge-neutral" style="font-size:10.5px;">${EXCEPCION_TIPO_LABELS[e.tipo]||e.tipo}</span>`:''}
             ${(e.horaInicio||e.horaFin)? ` · ${e.horaInicio||'—'} a ${e.horaFin||'—'}`:''}
+            ${e.motivo? `<div class="cell-muted"><strong>Motivo:</strong> ${esc(e.motivo)}</div>`:''}
             ${e.observaciones? `<div class="cell-muted">${esc(e.observaciones)}</div>`:''}
           </div>
           <div style="display:flex; gap:4px; flex-shrink:0;">
@@ -2840,10 +2875,23 @@ function cronogramaEditFormHtml(rot){
           </div>
         </div>
         <div class="field-row">
+          <div class="field"><label for="f-exc-tipo">Tipo de excepción</label>
+            <select class="select" id="f-exc-tipo" style="width:100%;">
+              <option value="">Sin especificar</option>
+              <option value="inasistencia" ${editingExc&&editingExc.tipo==='inasistencia'?'selected':''}>Inasistencia</option>
+              <option value="cambio_seccion" ${editingExc&&editingExc.tipo==='cambio_seccion'?'selected':''}>Cambio puntual de sección</option>
+              <option value="recuperatorio" ${editingExc&&editingExc.tipo==='recuperatorio'?'selected':''}>Recuperatorio</option>
+              <option value="licencia" ${editingExc&&editingExc.tipo==='licencia'?'selected':''}>Licencia / permiso</option>
+              <option value="otro" ${editingExc&&editingExc.tipo==='otro'?'selected':''}>Otro</option>
+            </select>
+          </div>
+          <div class="field"><label for="f-exc-motivo">Motivo</label><input class="input" id="f-exc-motivo" value="${editingExc?esc(editingExc.motivo||''):''}" placeholder="Ej: no asistió, turno médico…"></div>
+        </div>
+        <div class="field-row">
           <div class="field"><label for="f-exc-hora-inicio">Hora inicio (opcional)</label><input class="input" type="time" id="f-exc-hora-inicio" value="${editingExc&&editingExc.horaInicio?editingExc.horaInicio:''}"></div>
           <div class="field"><label for="f-exc-hora-fin">Hora fin (opcional)</label><input class="input" type="time" id="f-exc-hora-fin" value="${editingExc&&editingExc.horaFin?editingExc.horaFin:''}"></div>
         </div>
-        <div class="field"><label for="f-exc-observaciones">Observaciones (opcional)</label><textarea class="input" id="f-exc-observaciones" style="min-height:60px;">${editingExc?esc(editingExc.observaciones||''):''}</textarea></div>
+        <div class="field"><label for="f-exc-observaciones">Observación (opcional)</label><textarea class="input" id="f-exc-observaciones" style="min-height:60px;">${editingExc?esc(editingExc.observaciones||''):''}</textarea></div>
         <div style="display:flex; gap:8px;">
           <button class="btn btn-primary btn-sm" type="button" data-action="save-excepcion-semana" data-rotation-id="${rot.id}">${editingExc? icon('check','icon-sm')+' Guardar Rotación '+(excepciones.findIndex(e=>e.id===editingExc.id)+2) : icon('plus','icon-sm')+' Agregar Rotación '+(excepciones.length+2)}</button>
           ${editingExc? `<button class="btn btn-sm" type="button" data-action="cancel-edit-excepcion-semana" data-rotation-id="${rot.id}">Cancelar</button>`:''}
@@ -3831,6 +3879,7 @@ function render(){
   if(session.role==='alumno'){ app.innerHTML = renderStudentPortalPage(); attachGlobalEvents(); return; }
   app.innerHTML = renderShell();
   attachGlobalEvents();
+  restoreCronScroll();
 }
 
 function attachLoginEvents(){
@@ -3959,7 +4008,9 @@ function attachGlobalEvents(){
     const id = t.getAttribute('data-id');
 
     if(action==='nav'){
-      ui.view = t.getAttribute('data-view'); ui.notifOpen=false; ui.sidebarOpen=false; render();
+      ui.view = t.getAttribute('data-view'); ui.notifOpen=false; ui.sidebarOpen=false;
+      if(ui.view==='cronograma') cronScrollLeft = null; // al entrar de nuevo al Cronograma, arrancar en la semana actual
+      render();
       try{ localStorage.setItem('fat_last_view', ui.view); }catch(e){}
       if(ui.view==='documentos' && !DOCS){ try{ await loadDocumentos(); render(); }catch(e){ toast(e.message||'No se pudieron cargar los documentos','red'); } }
       if(ui.view==='planillas'){ try{ await Promise.all([loadPlanillas(), CRITERIOS?Promise.resolve():loadCriterios()]); render(); }catch(e){ toast(e.message||'No se pudieron cargar las planillas','red'); } }
@@ -4131,12 +4182,13 @@ function attachGlobalEvents(){
       const rotId = t.getAttribute('data-rotation-id');
       const editingId = val('f-exc-editing-id');
       const fecha = val('f-exc-fecha'); const sectionId = val('f-exc-seccion');
+      const tipo = val('f-exc-tipo'); const motivo = val('f-exc-motivo');
       const horaInicio = val('f-exc-hora-inicio'); const horaFin = val('f-exc-hora-fin'); const observaciones = val('f-exc-observaciones');
       if(!fecha || !sectionId){ toast('Elegí el día y la sección','red'); return; }
       const studentId = ui.modal.data.studentId;
       try{
-        if(editingId) await apiFetch('PUT','/api/cronograma-actividades/'+editingId, {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
-        else await apiFetch('POST','/api/cronograma-actividades', {fecha, sectionId, horaInicio, horaFin, observaciones, studentId});
+        if(editingId) await apiFetch('PUT','/api/cronograma-actividades/'+editingId, {fecha, sectionId, tipo, motivo, horaInicio, horaFin, observaciones, studentId});
+        else await apiFetch('POST','/api/cronograma-actividades', {fecha, sectionId, tipo, motivo, horaInicio, horaFin, observaciones, studentId});
         await loadDB(['cronogramaActividades']);
         const fresh = DB.rotations.find(r=>r.id===rotId);
         if(fresh) ui.modal.data = { ...fresh, _weekStart:ui.modal.data._weekStart, _weekEnd:ui.modal.data._weekEnd, _weekNum:ui.modal.data._weekNum, _editingExcepcionId:null };
@@ -4377,6 +4429,7 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{ try{ await apiFetch('DELETE','/api/comunicados/'+id); await loadDB(['comunicados']); toast('Lineamiento eliminado'); }catch(e){ toast(e.message||'Error','red'); } }
       });
     }
+    else if(action==='cron-ir-semana-actual'){ scrollCronogramaASemana(semanaActualCronograma(), true); }
     else if(action==='cronograma-tab'){ ui.cronogramaTab = t.getAttribute('data-tab'); render(); }
     else if(action==='act-cal-nav'){ ui.actCalMes = actAddMonths(ui.actCalMes, t.getAttribute('data-dir')==='next'?1:-1); render(); }
     else if(action==='act-cal-hoy'){ ui.actCalMes = todayISO().slice(0,7); render(); }
