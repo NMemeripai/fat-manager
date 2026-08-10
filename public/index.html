@@ -299,6 +299,27 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 .rot-label{font-size:12px; font-weight:700; line-height:1.3; display:flex; align-items:center; gap:5px;}
 .rot-sub{font-size:10.5px; color:var(--text-3); margin-top:5px;}
 
+/* Recorrido por secciones (perfil del alumno, vista admin): tarjetas por etapa,
+   scroll horizontal propio en desktop, columna vertical en celular. */
+.rec-timeline{display:flex; align-items:stretch; gap:2px; overflow-x:auto; overflow-y:hidden; padding:6px 6px 16px; scroll-snap-type:x proximity; -webkit-overflow-scrolling:touch; scrollbar-width:thin;}
+.rec-timeline::-webkit-scrollbar{height:6px;}
+.rec-timeline::-webkit-scrollbar-thumb{background:var(--border-strong); border-radius:8px;}
+.rec-stage{flex:0 0 230px; scroll-snap-align:start; border:1.5px solid var(--border); border-radius:var(--r-lg); background:var(--surface); padding:16px 17px; box-shadow:var(--shadow-xs);}
+.rec-stage.current{border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);}
+.rec-stage.done{background:var(--surface-2);}
+.rec-stage-num{width:30px; height:30px; border-radius:50%; background:var(--surface-2); color:var(--text-3); display:flex; align-items:center; justify-content:center; font-weight:750; font-size:12.5px; margin-bottom:11px; flex-shrink:0;}
+.rec-stage.done .rec-stage-num{background:var(--green); color:#fff;}
+.rec-stage.current .rec-stage-num{background:var(--accent); color:#fff;}
+.rec-stage-name{font-weight:700; font-size:14px; line-height:1.35; margin-bottom:9px; display:flex; align-items:flex-start; gap:6px;}
+.rec-stage-dates{font-size:12.5px; color:var(--text-2); font-weight:600; display:flex; align-items:center; gap:6px; margin-bottom:10px; white-space:nowrap;}
+.rec-stage-meta{font-size:11.5px; color:var(--text-3); line-height:1.75;}
+.rec-connector{display:flex; align-items:center; justify-content:center; flex:0 0 26px; color:var(--text-3);}
+@media(max-width:700px){
+  .rec-timeline{flex-direction:column; overflow-x:visible; padding:6px 2px 2px;}
+  .rec-stage{flex-basis:auto; width:100%;}
+  .rec-connector{transform:rotate(90deg); flex:0 0 30px;}
+}
+
 /* bars & progress */
 .bar-row{display:flex; align-items:center; gap:10px; margin-bottom:11px;}
 .bar-label{width:150px; font-size:12.5px; color:var(--text-2); flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
@@ -1995,11 +2016,26 @@ function renderStudentDetail(){
 
   <div class="section-card">
     <h3>Recorrido por secciones</h3>
-    <div class="timeline">
+    <div class="rec-timeline">
       ${rots.map((r,i)=>{
-        const cls = r.status==='finalizada'?'done':(isRotationCurrentByDate(r)?'current':'');
-        const dot = r.status==='finalizada'? icon('check','icon-sm') : (i+1);
-        return `<div class="tl-step ${cls}"><div class="tl-line"></div><div class="tl-dot">${dot}</div><div class="tl-label">${sectionDot(r.sectionId)} ${esc(sectionName(r.sectionId))}</div><div class="tl-sub">${fmtDate(r.startDate)} – ${fmtDate(r.endDate)}</div></div>`;
+        const today = todayISO();
+        let cls, estadoLabel;
+        if(isRotationCurrentByDate(r)){ cls='current'; estadoLabel='EN CURSO'; }
+        else if(r.startDate>today){ cls='proxima'; estadoLabel='PRÓXIMA'; }
+        else { cls='done'; estadoLabel='COMPLETADA'; }
+        const tutor = r.teacherId? teacherName(r.teacherId) : null;
+        const card = `<div class="rec-stage ${cls}">
+          <div class="rec-stage-num">${cls==='done'?icon('check','icon-sm'):(i+1)}</div>
+          <div class="rec-stage-name">${sectionDot(r.sectionId)} ${esc(sectionName(r.sectionId))}</div>
+          <div class="rec-stage-dates">${icon('calendar','icon-sm')} ${fmtDate(r.startDate)} → ${fmtDate(r.endDate)}</div>
+          <div class="rec-stage-meta">
+            ${r.empresa? `<div><strong>Empresa:</strong> ${esc(r.empresa)}</div>`:''}
+            ${tutor? `<div><strong>Tutor:</strong> ${esc(tutor)}</div>`:''}
+            <div style="margin-top:4px;">${cls==='current'?`<span class="badge badge-accent">${estadoLabel}</span>`:cls==='proxima'?`<span class="badge badge-neutral">${estadoLabel}</span>`:`<span class="badge badge-green">${estadoLabel}</span>`}</div>
+          </div>
+        </div>`;
+        const connector = i<rots.length-1? `<div class="rec-connector">${icon('chevronRight','icon-sm')}</div>` : '';
+        return card+connector;
       }).join('')}
     </div>
   </div>
