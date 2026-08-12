@@ -775,10 +775,13 @@ async function buildSeguimiento(studentId) {
   const contenidosPorSemana = [];
   rotations.forEach(r => {
     (r.respuestasAlumno || []).forEach(resp => {
+      // Compatibilidad: respuestas viejas guardaban un solo documentoId; las nuevas guardan
+      // un array "documentos" (uno por cada archivo que el alumno haya subido esa semana).
+      const documentos = resp.documentos || (resp.documentoId ? [{ documentoId: resp.documentoId, documentoNombre: resp.documentoNombre }] : []);
       contenidosPorSemana.push({
         semana: resp.semana, sectionNombre: sById[r.sectionId] ? sById[r.sectionId].nombre : null,
         leido: !!resp.leido, actividadRealizada: !!resp.actividadRealizada,
-        documentoId: resp.documentoId || null, observacion: resp.observacion || '',
+        documentos, observacion: resp.observacion || '',
         estado: resp.actividadRealizada ? 'completado' : (resp.leido ? 'en_proceso' : 'pendiente')
       });
     });
@@ -1226,25 +1229,31 @@ function currentWeekOfDate(student, config, dateISO) {
 app.post('/api/mi-portal/respuesta', auth, requireRole('alumno'), h(async (req, res) => {
   const studentId = req.user.studentId;
   if (!studentId) return res.status(400).json({ error: 'Esta cuenta no está vinculada a ningún alumno' });
-  const { rotationId, semana, leido, actividadRealizada, observacion, documentoId } = req.body || {};
+  const { rotationId, semana, leido, actividadRealizada, observacion } = req.body || {};
+  // Antes solo se aceptaba un documento por semana (documentoId, singular). Ahora se acepta
+  // una lista (documentoIds) para permitir cargar todos los documentos que hagan falta esa
+  // semana, sin reemplazar los ya subidos. Se mantiene compatibilidad si algo viejo todavía
+  // manda "documentoId" suelto.
+  const idsRecibidos = Array.isArray(req.body.documentoIds) ? req.body.documentoIds : (req.body.documentoId ? [req.body.documentoId] : []);
   const r = await docData('rotations', rotationId);
   if (!r || r.studentId !== studentId) return res.status(403).json({ error: 'No podés responder sobre una rotación que no es tuya' });
 
-  let documentoNombre = null;
-  if (documentoId) {
+  const documentos = [];
+  for (const documentoId of idsRecibidos) {
+    if (!documentoId) continue;
     const doc = await docData('documentos', documentoId);
     if (!doc || doc.uploadedBy !== req.user.sub || doc.studentId !== studentId) {
-      return res.status(403).json({ error: 'El documento adjunto no es válido' });
+      return res.status(403).json({ error: 'Uno de los documentos adjuntos no es válido' });
     }
     await db.collection('documentos').doc(documentoId).update({
       semana, rotationId, sectionId: r.sectionId, estado: 'entregado'
     });
-    documentoNombre = doc.nombre;
+    documentos.push({ documentoId, documentoNombre: doc.nombre });
   }
 
   const nuevo = {
     semana, leido: !!leido, actividadRealizada: !!actividadRealizada, observacion: observacion || '',
-    fecha: todayISO(), documentoId: documentoId || null, documentoNombre
+    fecha: todayISO(), documentos
   };
   const existingList = r.respuestasAlumno || [];
   const existingIdx = existingList.findIndex(e => e.semana === semana);
