@@ -496,6 +496,14 @@ let SEGUIMIENTO_LIST = null; // listado de "Seguimiento de Alumnos" en el Dashbo
 let SEGUIMIENTO_DETALLE = null; // ficha de seguimiento del alumno seleccionado
 let RD_SUGERIDO_TMP = null; // datos sugeridos mientras el alumno elige el modo (formulario vs archivo), antes de crear el registro
 let NOTIFICACIONES = null; // notificaciones del alumno (aprobación/rechazo/corrección)
+let spDocsAcumulados = null; // documentos subidos esta semana en "Tu seguimiento" (permite varios, no reemplaza)
+function getSpDocsAcumulados(misRespuestas){
+  if(spDocsAcumulados===null){
+    const base = misRespuestas ? (misRespuestas.documentos || (misRespuestas.documentoId? [{documentoId:misRespuestas.documentoId, documentoNombre:misRespuestas.documentoNombre}] : [])) : [];
+    spDocsAcumulados = base.slice();
+  }
+  return spDocsAcumulados;
+}
 let rdSaveTimer = null;
 let session = null;
 let tourStep = null; // null = tour cerrado; número = paso actual del tour interactivo
@@ -668,6 +676,7 @@ async function loadDB(only){
 }
 async function loadStudentPortal(){
   SP = await apiFetch('GET', '/api/mi-portal');
+  spDocsAcumulados = null; // se vuelve a armar desde SP fresco (ver getSpDocsAcumulados)
   loadNotificaciones().then(render).catch(()=>{}); // liviano y no bloqueante: no retrasa el login
 }
 async function loadDocumentos(){
@@ -1149,16 +1158,17 @@ function renderSPHome(){
           <label>Subir Documento</label>
           <label class="file-drop" for="sp-doc-file" id="sp-doc-file-label" style="display:flex; flex-direction:column; align-items:center; gap:6px; padding:30px 16px;">
             ${icon('upload','icon-lg')}
-            <div id="sp-doc-file-text" style="font-weight:650; font-size:13.5px;">${(misRespuestas&&misRespuestas.documentoNombre)? esc(misRespuestas.documentoNombre) : 'Hacé clic para subir tu documento'}</div>
-            <div style="font-size:11.5px; color:var(--text-3);">PDF, Word (.doc / .docx) o Excel (.xls / .xlsx)</div>
+            <div id="sp-doc-file-text" style="font-weight:650; font-size:13.5px;">${getSpDocsAcumulados(misRespuestas).length? 'Subir otro documento' : 'Hacé clic para subir tu documento'}</div>
+            <div style="font-size:11.5px; color:var(--text-3);">PDF, Word (.doc / .docx) o Excel (.xls / .xlsx) · Podés subir todos los que necesites</div>
           </label>
           <input type="file" id="sp-doc-file" accept=".pdf,.doc,.docx,.xls,.xlsx" style="display:none;">
-          <div id="sp-doc-status" style="margin-top:9px; font-size:12.5px;">${(misRespuestas&&misRespuestas.documentoNombre)? `<span class="file-chip">${icon('paperclip','icon-sm')} ${esc(misRespuestas.documentoNombre)}</span>` : ''}</div>
+          <div id="sp-doc-status" style="margin-top:9px; font-size:12.5px;"></div>
           <div id="sp-doc-progress-wrap" style="display:none; margin-top:9px;">
             <div class="bar-track"><div class="bar-fill" id="sp-doc-progress-bar" style="width:0%;"></div></div>
           </div>
-          <input type="hidden" id="sp-doc-id" value="${(misRespuestas&&misRespuestas.documentoId)||''}">
-          <input type="hidden" id="sp-doc-name" value="${(misRespuestas&&misRespuestas.documentoNombre)||''}">
+          <div id="sp-doc-list" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:${getSpDocsAcumulados(misRespuestas).length?'9px':'0'};">
+            ${getSpDocsAcumulados(misRespuestas).map(d=>`<span class="file-chip">${icon('paperclip','icon-sm')} ${esc(d.documentoNombre)}</span>`).join('')}
+          </div>
         </div>
 
         <div class="field"><label for="sp-observacion">Observaciones</label><textarea class="input" id="sp-observacion" placeholder="Escribí acá cualquier comentario sobre esta semana..." style="min-height:110px;">${misRespuestas?esc(misRespuestas.observacion||''):''}</textarea></div>
@@ -1905,7 +1915,7 @@ function renderSeguimientoDetalle(){
       <tbody>${d.contenidosPorSemana.map(c=>`
         <tr><td class="cell-strong">Semana ${c.semana}</td><td>${esc(c.sectionNombre||'—')}</td>
         <td>${c.estado==='completado'?'<span class="badge badge-green">Completado</span>':c.estado==='en_proceso'?'<span class="badge badge-amber">En proceso</span>':'<span class="badge badge-neutral">Pendiente</span>'}</td>
-        <td>${c.documentoId? `<button class="btn btn-sm" data-action="download-documento" data-id="${c.documentoId}">${icon('download','icon-sm')} Ver</button>` : '<span class="cell-muted">—</span>'}</td></tr>`).join('')}</tbody>
+        <td>${(c.documentos&&c.documentos.length)? c.documentos.map(d=>`<button class="btn btn-sm" data-action="download-documento" data-id="${d.documentoId}" data-name="${esc(d.documentoNombre||'')}" style="margin:2px;">${icon('download','icon-sm')} ${esc(d.documentoNombre||'Ver')}</button>`).join('') : '<span class="cell-muted">—</span>'}</td></tr>`).join('')}</tbody>
     </table></div>` : `<div class="empty-state" style="padding:20px;">Sin respuestas semanales cargadas todavía.</div>`}
   </div>
 
@@ -4177,9 +4187,9 @@ function attachGlobalEvents(){
       const leido = document.getElementById('sp-leido').checked;
       const actividadRealizada = document.getElementById('sp-actividad').checked;
       const observacion = document.getElementById('sp-observacion').value.trim();
-      const documentoId = document.getElementById('sp-doc-id').value;
+      const documentoIds = getSpDocsAcumulados(null).map(d=>d.documentoId).filter(Boolean);
       try{
-        await apiFetch('POST', '/api/mi-portal/respuesta', { rotationId, semana, leido, actividadRealizada, observacion, documentoId: documentoId||null });
+        await apiFetch('POST', '/api/mi-portal/respuesta', { rotationId, semana, leido, actividadRealizada, observacion, documentoIds });
         await loadStudentPortal(); render(); toast('Respuesta guardada');
       }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
     }
@@ -4790,7 +4800,6 @@ function attachGlobalEvents(){
       if(!f) return;
       const allowedExt = ['.pdf','.doc','.docx','.xls','.xlsx'];
       const ext = '.'+(f.name.split('.').pop()||'').toLowerCase();
-      const textEl = document.getElementById('sp-doc-file-text');
       const statusEl = document.getElementById('sp-doc-status');
       const progressWrap = document.getElementById('sp-doc-progress-wrap');
       const progressBar = document.getElementById('sp-doc-progress-bar');
@@ -4799,8 +4808,7 @@ function attachGlobalEvents(){
         t.value = '';
         return;
       }
-      if(textEl) textEl.textContent = f.name;
-      if(statusEl) statusEl.innerHTML = '<span class="cell-muted">'+formatFileSize(f.size)+' · Subiendo…</span>';
+      if(statusEl) statusEl.innerHTML = '<span class="cell-muted">'+esc(f.name)+' · '+formatFileSize(f.size)+' · Subiendo…</span>';
       if(progressWrap) progressWrap.style.display = 'block';
       if(progressBar) progressBar.style.width = '0%';
 
@@ -4815,10 +4823,10 @@ function attachGlobalEvents(){
       xhr.onload = ()=>{
         if(xhr.status>=200 && xhr.status<300){
           let data={}; try{ data = JSON.parse(xhr.responseText); }catch(err){}
-          const idField = document.getElementById('sp-doc-id'); if(idField) idField.value = data.id||'';
-          const nameField = document.getElementById('sp-doc-name'); if(nameField) nameField.value = data.nombre||f.name;
-          if(statusEl) statusEl.innerHTML = '<span class="file-chip">'+icon('paperclip','icon-sm')+' '+esc(data.nombre||f.name)+' · '+formatFileSize(f.size)+'</span>';
+          // Se agrega a la lista de documentos de esta semana — NO reemplaza los que ya se subieron.
+          getSpDocsAcumulados(null).push({ documentoId:data.id||'', documentoNombre:data.nombre||f.name });
           if(progressWrap) progressWrap.style.display = 'none';
+          render();
           toast('Documento subido');
         } else {
           let msg = 'No se pudo subir el archivo';
