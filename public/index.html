@@ -496,6 +496,7 @@ let SEGUIMIENTO_LIST = null; // listado de "Seguimiento de Alumnos" en el Dashbo
 let SEGUIMIENTO_DETALLE = null; // ficha de seguimiento del alumno seleccionado
 let RD_SUGERIDO_TMP = null; // datos sugeridos mientras el alumno elige el modo (formulario vs archivo), antes de crear el registro
 let NOTIFICACIONES = null; // notificaciones del alumno (aprobación/rechazo/corrección)
+let OBJGEN_ACTUAL = null; // Objetivo General de la sección seleccionada en Lineamientos (admin/profesor)
 let spDocsAcumulados = null; // documentos subidos esta semana en "Tu seguimiento" (permite varios, no reemplaza)
 function getSpDocsAcumulados(misRespuestas){
   if(spDocsAcumulados===null){
@@ -554,7 +555,7 @@ let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, m
   sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
   cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7), cronogramaTab:'semanal',
   spView:'home', rdFecha:todayISO(), rdFilters:{}, rdSort:{key:'fecha',dir:'desc'}, spNotifOpen:false, rdSelected:{}, rdShowTrash:false,
-  segFilters:{} };
+  segFilters:{}, objGenSectionId:'' };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -1133,10 +1134,11 @@ function renderSPHome(){
         ${objetivosSemanales.length? objetivosSemanales.map(o=>`<p style="margin-bottom:6px;"><strong>Objetivo:</strong> ${esc(o.texto)}${o.archivo?` · <a href="${o.archivo.url}" target="_blank" rel="noopener">${esc(o.archivo.nombre)}</a>`:''}</p>`).join('') : ''}
       </div>
 
-      ${SP.objetivoGeneral? `
+      ${SP.objetivoGeneralSeccion? `
       <div class="section-card">
-        <h3>Objetivo General</h3>
-        <a href="${SP.objetivoGeneral.url}" target="_blank" rel="noopener" class="file-chip">${icon(SP.objetivoGeneral.tipo==='link'?'paperclip':'file','icon-sm')} ${esc(SP.objetivoGeneral.nombre)}</a>
+        <h3>Objetivo General — ${esc(SP.objetivoGeneralSeccion.sectionName)}</h3>
+        ${SP.objetivoGeneralSeccion.generalObjective? `<p style="margin-bottom:${SP.objetivoGeneralSeccion.materials.length?'10px':'0'};">${esc(SP.objetivoGeneralSeccion.generalObjective)}</p>`:''}
+        ${SP.objetivoGeneralSeccion.materials.length? `<div style="display:flex; flex-wrap:wrap; gap:8px;">${SP.objetivoGeneralSeccion.materials.map(m=>`<a href="${API_BASE}/api/objetivos-generales/${SP.objetivoGeneralSeccion.sectionId}/material/${m.id}/download" target="_blank" rel="noopener" class="file-chip">${m.tipo==='pdf'?'📄':m.tipo==='word'?'📝':'🔗'} ${esc(m.nombre)}</a>`).join('')}</div>`:''}
       </div>` : ''}
 
       <div class="section-card">
@@ -2388,10 +2390,12 @@ function renderPendientes(){
 function renderGuidelines(){
   const canEdit = session.role==='admin' || session.role==='coordinador';
   const canAsignarObjetivo = ['admin','seccion','coordinador'].includes(session.role);
+  const isAdmin = session.role==='admin';
   const c = DB.config;
   const consignas = DB.consignas || [];
   const objetivosSemanales = DB.objetivosSemanales || [];
-  const og = c.objetivoGeneral;
+  const seccionesVisibles = session.role==='seccion' ? DB.sections.filter(s=>s.id===session.sectionId) : DB.sections;
+  const og = OBJGEN_ACTUAL;
   return `
   <div class="page-head">
     <div><h1 class="page-title">Lineamientos</h1><p class="page-sub">Válidos durante todo el ciclo lectivo</p></div>
@@ -2403,8 +2407,44 @@ function renderGuidelines(){
   </div>
 
   <div class="section-card">
-    <h3>Objetivo General ${session.role==='admin'? `<button class="btn btn-sm" data-action="edit-objetivo-general">${icon('edit','icon-sm')} ${og?'Editar':'Cargar'}</button>`:''}</h3>
-    ${og? (og.tipo==='link'? `<a href="${og.url}" target="_blank" rel="noopener" class="file-chip">${icon('paperclip','icon-sm')} ${esc(og.nombre)}</a>` : `<a href="${og.url}" target="_blank" rel="noopener" class="file-chip">${icon('file','icon-sm')} ${esc(og.nombre)}</a>`) : `<div class="empty-state" style="padding:20px;">Sin objetivo general publicado</div>`}
+    <h3>Objetivos Generales</h3>
+    <p class="cell-muted" style="font-size:12px; margin-bottom:10px;">Cada sección tiene su propio objetivo general y su propio material — son independientes entre sí.</p>
+    <div class="field" style="max-width:340px;">
+      <label for="objgen-seccion">Sección</label>
+      <select class="select" id="objgen-seccion" style="width:100%;">
+        <option value="">Seleccionar sección…</option>
+        ${seccionesVisibles.slice().sort((a,b)=>a.orden-b.orden).map(s=>`<option value="${s.id}" ${ui.objGenSectionId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}
+      </select>
+    </div>
+    ${!ui.objGenSectionId? '' : og===null? `<div class="empty-state" style="padding:20px;"><span class="spinner spinner-accent"></span></div>` : `
+    <div style="margin-top:14px;">
+      <div class="field">
+        <label for="objgen-texto">Objetivo general de ${esc(og.sectionName)}</label>
+        <textarea class="input" id="objgen-texto" style="min-height:110px;" placeholder="Ej: Comprender las principales características, manejo y aprovechamiento de ${esc(og.sectionName)}." ${isAdmin?'':'disabled'}>${esc(og.generalObjective||'')}</textarea>
+      </div>
+      ${isAdmin? `<button class="btn btn-primary btn-sm" data-action="save-objetivo-general">${icon('check','icon-sm')} Guardar objetivo</button>`:''}
+
+      <h4 style="margin:20px 0 10px; font-size:13.5px;">Material complementario</h4>
+      ${isAdmin? `
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+        <button class="btn btn-sm" data-action="objgen-agregar-archivo" data-tipo="pdf">${icon('plus','icon-sm')} Agregar PDF</button>
+        <button class="btn btn-sm" data-action="objgen-agregar-archivo" data-tipo="word">${icon('plus','icon-sm')} Agregar Word</button>
+        <button class="btn btn-sm" data-action="objgen-agregar-enlace">${icon('plus','icon-sm')} Agregar enlace</button>
+        <input type="file" id="objgen-file-pdf" accept=".pdf" style="display:none;">
+        <input type="file" id="objgen-file-word" accept=".doc,.docx" style="display:none;">
+      </div>
+      <div id="objgen-progress-wrap" style="display:none; margin-bottom:12px;"><div class="bar-track"><div class="bar-fill" id="objgen-progress-bar" style="width:0%;"></div></div></div>
+      `:''}
+      ${(og.materials&&og.materials.length)? `<ul class="mono-list">${og.materials.map(m=>`
+        <li>
+          <span><a href="${API_BASE}/api/objetivos-generales/${og.sectionId}/material/${m.id}/download" target="_blank" rel="noopener">${m.tipo==='pdf'?'📄':m.tipo==='word'?'📝':'🔗'} ${esc(m.nombre)}</a></span>
+          <span style="display:flex; gap:10px; align-items:center;">
+            ${m.tipo!=='link'? `<a href="${API_BASE}/api/objetivos-generales/${og.sectionId}/material/${m.id}/download?download=1" class="cell-muted" style="font-size:11.5px;">${icon('download','icon-sm')}</a>`:''}
+            ${isAdmin? `<span class="tag-remove" data-action="del-material-objgen" data-id="${m.id}">${icon('x','icon-sm')}</span>`:''}
+          </span>
+        </li>`).join('')}</ul>` : `<div class="empty-state" style="padding:16px;">Sin material cargado todavía</div>`}
+    </div>
+    `}
   </div>
 
   <div class="section-card">
@@ -2449,22 +2489,6 @@ function recuperatorioFormHtml(p){
   <div class="field"><label for="f-rec-actividad">Actividad realizada</label><textarea class="input" id="f-rec-actividad" style="min-height:60px;">${esc(rec.actividadRealizada||'')}</textarea></div>
   <div class="field"><label for="f-rec-resultado">Resultado</label><input class="input" id="f-rec-resultado" value="${esc(rec.resultado||'')}"></div>
   <div class="field"><label for="f-rec-observaciones">Observaciones</label><textarea class="input" id="f-rec-observaciones" style="min-height:60px;">${esc(rec.observaciones||'')}</textarea></div>
-  `;
-}
-
-function objetivoGeneralFormHtml(){
-  const og = DB.config.objetivoGeneral;
-  return `
-  <div class="field"><label for="f-objgen-url">Enlace de Google Drive</label><input class="input" id="f-objgen-url" placeholder="https://drive.google.com/..." value="${og&&og.tipo==='link'?esc(og.url):''}"></div>
-  <p class="cell-muted" style="font-size:12px; margin:6px 0 14px;">— o, si preferís, subí un archivo (esto reemplaza el enlace de arriba) —</p>
-  <div class="field">
-    <label class="file-drop" for="f-objgen-file" style="display:flex; flex-direction:column; align-items:center; gap:6px; padding:24px 16px;">
-      ${icon('upload','icon-lg')}
-      <div id="f-objgen-file-text" style="font-weight:650; font-size:13.5px;">${og&&og.tipo==='archivo'?esc(og.nombre):'Hacé clic para subir PDF, DOC o DOCX'}</div>
-    </label>
-    <input type="file" id="f-objgen-file" accept=".pdf,.doc,.docx" style="display:none;">
-  </div>
-  <div id="f-objgen-progress-wrap" style="display:none; margin-top:9px;"><div class="bar-track"><div class="bar-fill" id="f-objgen-progress-bar" style="width:0%;"></div></div></div>
   `;
 }
 
@@ -3730,7 +3754,7 @@ function renderModal(){
   else if(m.type==='guidelines-form'){ title='Editar lineamientos'; body = guidelinesFormHtml(); }
   else if(m.type==='consigna-form'){ title='Nueva consigna'; body = `<div class="field"><label for="f-consigna">Texto</label><textarea class="input" id="f-consigna"></textarea></div>`; }
   else if(m.type==='objetivo-semanal-form'){ title='Nuevo objetivo semanal'; wide=true; body = objetivoSemanalFormHtml(); }
-  else if(m.type==='objetivo-general-form'){ title='Objetivo General del establecimiento'; body = objetivoGeneralFormHtml(); }
+  else if(m.type==='material-link-form'){ title='Agregar enlace'; body = `<div class="field"><label for="f-mat-nombre">Nombre del material</label><input class="input" id="f-mat-nombre" placeholder="Ej: Material de Google Drive"></div><div class="field"><label for="f-mat-url">Enlace</label><input class="input" id="f-mat-url" placeholder="https://drive.google.com/..."></div>`; }
   else if(m.type==='recuperatorio-form'){ title='Registrar recuperatorio'; body = recuperatorioFormHtml(m.data); }
   else if(m.type==='pendiente-form'){ title='Nuevo contenido pendiente'; body = pendienteFormHtml(); }
   else if(m.type==='quick-week-form'){ title='Cargar semana'; body = quickWeekFormHtml(m.data); }
@@ -4438,7 +4462,24 @@ function attachGlobalEvents(){
     else if(action==='edit-guidelines'){ ui.modal={type:'guidelines-form', data:null}; render(); }
     else if(action==='add-consigna'){ ui.modal={type:'consigna-form', data:null}; render(); }
     else if(action==='new-objetivo-semanal'){ ui.modal={type:'objetivo-semanal-form', data:null}; render(); }
-    else if(action==='edit-objetivo-general'){ ui.modal={type:'objetivo-general-form', data:null}; render(); }
+    else if(action==='objgen-agregar-archivo'){ document.getElementById('objgen-file-'+t.getAttribute('data-tipo')).click(); }
+    else if(action==='objgen-agregar-enlace'){ ui.modal={type:'material-link-form', data:null}; render(); }
+    else if(action==='save-objetivo-general'){
+      const generalObjective = document.getElementById('objgen-texto').value.trim();
+      try{
+        await apiFetch('PUT', '/api/objetivos-generales/'+ui.objGenSectionId, { generalObjective });
+        await loadObjetivoGeneral(ui.objGenSectionId); render(); toast('Objetivo general guardado');
+      }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
+    }
+    else if(action==='del-material-objgen'){
+      askConfirm({
+        title:'Eliminar material', message:'¿Eliminar este material? Esta acción no se puede deshacer.', confirmLabel:'Eliminar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE', '/api/objetivos-generales/'+ui.objGenSectionId+'/material/'+id); await loadObjetivoGeneral(ui.objGenSectionId); render(); toast('Material eliminado'); }
+          catch(e){ toast(e.message||'No se pudo eliminar', 'red'); }
+        }
+      });
+    }
     else if(action==='new-pendiente'){ ui.modal={type:'pendiente-form', data:null}; render(); }
     else if(action==='new-documento'){ ui.modal={type:'documento-form', data:null}; render(); }
     else if(action==='new-planilla'){ ui.modal={type:'planilla-form', data:null}; render(); }
@@ -4658,7 +4699,7 @@ function attachGlobalEvents(){
       if(type==='documento-form') await uploadDocumento();
       else if(type==='comunicado-form') await uploadComunicado();
       else if(type==='objetivo-semanal-form') await uploadObjetivoSemanal();
-      else if(type==='objetivo-general-form') await uploadObjetivoGeneral();
+      else if(type==='material-link-form') await uploadMaterialObjetivoGeneral(null, 'link');
       else await submitModal(action, type, t.getAttribute('data-id'));
     }
     else if(action==='sort-th'){
@@ -4719,6 +4760,22 @@ function attachGlobalEvents(){
     else if(t.matches('[data-action="filter-seg-curso"]')){ ui.segFilters.curso = t.value; await loadSeguimientoList(); render(); }
     else if(t.matches('[data-action="filter-seg-grupo"]')){ ui.segFilters.groupId = t.value; await loadSeguimientoList(); render(); }
     else if(t.matches('[data-action="filter-seg-seccion"]')){ ui.segFilters.sectionId = t.value; await loadSeguimientoList(); render(); }
+    else if(t.id==='objgen-seccion'){
+      ui.objGenSectionId = t.value;
+      if(!ui.objGenSectionId){ OBJGEN_ACTUAL=null; render(); return; }
+      OBJGEN_ACTUAL = null; render();
+      loadObjetivoGeneral(ui.objGenSectionId).then(render).catch(e=>{ toast(e.message||'No se pudo cargar','red'); });
+    }
+    else if(t.id==='objgen-file-pdf' || t.id==='objgen-file-word'){
+      const f = t.files && t.files[0];
+      if(!f) return;
+      const tipo = t.id==='objgen-file-pdf' ? 'pdf' : 'word';
+      const allowedExt = tipo==='pdf' ? ['.pdf'] : ['.doc','.docx'];
+      const ext = '.'+(f.name.split('.').pop()||'').toLowerCase();
+      if(!allowedExt.includes(ext)){ toast('Formato no permitido','red'); t.value=''; return; }
+      uploadMaterialObjetivoGeneral(f, tipo);
+      t.value='';
+    }
     else if(t.matches('[data-action="cron-filtro-grupo"]')){ ui.cronFiltroGrupo = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-seccion"]')){ ui.cronFiltroSeccion = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-curso"]')){ ui.cronFiltroCurso = t.value; render(); }
@@ -4994,40 +5051,53 @@ async function uploadComunicado(){
 
 async function loadObjetivosSemanales(){ await loadDB(['objetivosSemanales']); }
 
-async function uploadObjetivoGeneral(){
-  const url = document.getElementById('f-objgen-url').value.trim();
-  const file = document.getElementById('f-objgen-file').files[0];
-  if(!url && !file){ toast('Pegá un enlace de Drive o subí un archivo','red'); return; }
+async function loadObjetivoGeneral(sectionId){
+  OBJGEN_ACTUAL = null;
+  OBJGEN_ACTUAL = await apiFetch('GET', '/api/objetivos-generales/'+sectionId);
+}
 
+async function uploadMaterialObjetivoGeneral(file, tipo){
+  const sectionId = ui.objGenSectionId;
+  if(!sectionId) return;
   const fd = new FormData();
-  if(file) fd.append('file', file);
-  else fd.append('url', url);
+  let nombreParaError = '';
+  if(tipo==='link'){
+    const nombre = document.getElementById('f-mat-nombre').value.trim();
+    const url = document.getElementById('f-mat-url').value.trim();
+    if(!url){ toast('Pegá un enlace', 'red'); return; }
+    fd.append('url', url);
+    if(nombre) fd.append('nombre', nombre);
+    nombreParaError = nombre || 'el enlace';
+  } else {
+    fd.append('file', file);
+    nombreParaError = file.name;
+  }
 
-  const progressWrap = document.getElementById('f-objgen-progress-wrap');
-  const progressBar = document.getElementById('f-objgen-progress-bar');
-  if(file && progressWrap) progressWrap.style.display='block';
+  const progressWrap = document.getElementById('objgen-progress-wrap');
+  const progressBar = document.getElementById('objgen-progress-bar');
+  if(tipo!=='link' && progressWrap){ progressWrap.style.display='block'; if(progressBar) progressBar.style.width='0%'; }
   const saveBtn = document.querySelector('[data-action="submit-modal"]');
-  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Guardando…'; }
+  if(tipo==='link' && saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Guardando…'; }
 
   try{
     await new Promise((resolve, reject)=>{
       const xhr = new XMLHttpRequest();
-      xhr.open('PUT', API_BASE+'/api/objetivo-general');
+      xhr.open('POST', API_BASE+'/api/objetivos-generales/'+sectionId+'/material');
       xhr.setRequestHeader('Authorization', 'Bearer '+authToken);
       xhr.upload.onprogress = (e)=>{ if(e.lengthComputable && progressBar) progressBar.style.width = Math.round((e.loaded/e.total)*100)+'%'; };
       xhr.onload = ()=>{
         if(xhr.status>=200 && xhr.status<300) resolve();
-        else{ let msg='No se pudo guardar el Objetivo General'; try{ msg = JSON.parse(xhr.responseText).error||msg; }catch(e){} reject(new Error(msg)); }
+        else{ let msg='No se pudo agregar '+nombreParaError; try{ msg = JSON.parse(xhr.responseText).error||msg; }catch(e){} reject(new Error(msg)); }
       };
       xhr.onerror = ()=> reject(new Error('Error de conexión'));
       xhr.send(fd);
     });
-    ui.modal = null;
-    await loadDB(['config','activityLog']);
+    if(tipo==='link') ui.modal = null;
+    await loadObjetivoGeneral(sectionId);
     render();
-    toast('Objetivo General actualizado');
+    toast('Material agregado');
   }catch(e){
-    toast(e.message||'No se pudo guardar', 'red');
+    toast(e.message||'No se pudo agregar el material', 'red');
     if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Guardar'; }
     if(progressWrap) progressWrap.style.display='none';
   }
