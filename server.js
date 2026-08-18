@@ -970,7 +970,10 @@ app.get('/api/objetivos-generales/:sectionId/material/:materialId/download', aut
   if (!upstream.ok) return res.status(502).json({ error: 'No se pudo obtener el archivo desde el almacenamiento' });
   const ext = extOf(m.nombre);
   const buffer = Buffer.from(await upstream.arrayBuffer());
-  const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+  // El navegador no tiene forma de "mostrar" un Word adentro de una pestaña (no hay visor nativo
+  // como con el PDF), así que para Word siempre forzamos la descarga — si no, el link de "ver"
+  // no hacía nada útil y parecía que estaba roto.
+  const disposition = (m.tipo === 'word' || req.query.download === '1') ? 'attachment' : 'inline';
   res.setHeader('Content-Type', DOC_MIME_TYPES[ext] || 'application/octet-stream');
   res.setHeader('Content-Disposition', `${disposition}; filename="${m.nombre}"; filename*=UTF-8''${encodeURIComponent(m.nombre)}`);
   res.send(buffer);
