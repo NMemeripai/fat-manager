@@ -1138,7 +1138,7 @@ function renderSPHome(){
       <div class="section-card">
         <h3>Objetivo General — ${esc(SP.objetivoGeneralSeccion.sectionName)}</h3>
         ${SP.objetivoGeneralSeccion.generalObjective? `<p style="margin-bottom:${SP.objetivoGeneralSeccion.materials.length?'10px':'0'};">${esc(SP.objetivoGeneralSeccion.generalObjective)}</p>`:''}
-        ${SP.objetivoGeneralSeccion.materials.length? `<div style="display:flex; flex-wrap:wrap; gap:8px;">${SP.objetivoGeneralSeccion.materials.map(m=>`<a href="${API_BASE}/api/objetivos-generales/${SP.objetivoGeneralSeccion.sectionId}/material/${m.id}/download" target="_blank" rel="noopener" class="file-chip">${m.tipo==='pdf'?'📄':m.tipo==='word'?'📝':'🔗'} ${esc(m.nombre)}</a>`).join('')}</div>`:''}
+        ${SP.objetivoGeneralSeccion.materials.length? `<div style="display:flex; flex-wrap:wrap; gap:8px;">${SP.objetivoGeneralSeccion.materials.map(m=>m.tipo==='link'? `<a href="${m.url}" target="_blank" rel="noopener" class="file-chip">🔗 ${esc(m.nombre)}</a>` : `<button class="file-chip" style="border:none; cursor:pointer;" data-action="download-material-objgen" data-section-id="${SP.objetivoGeneralSeccion.sectionId}" data-material-id="${m.id}" data-name="${esc(m.nombre)}">${m.tipo==='pdf'?'📄':'📝'} ${esc(m.nombre)}</button>`).join('')}</div>`:''}
       </div>` : ''}
 
       <div class="section-card">
@@ -2437,9 +2437,8 @@ function renderGuidelines(){
       `:''}
       ${(og.materials&&og.materials.length)? `<ul class="mono-list">${og.materials.map(m=>`
         <li>
-          <span><a href="${API_BASE}/api/objetivos-generales/${og.sectionId}/material/${m.id}/download" target="_blank" rel="noopener">${m.tipo==='pdf'?'📄':m.tipo==='word'?'📝':'🔗'} ${esc(m.nombre)}</a></span>
+          <span>${m.tipo==='link'? `<a href="${m.url}" target="_blank" rel="noopener">🔗 ${esc(m.nombre)}</a>` : `<a href="#" data-action="download-material-objgen" data-section-id="${og.sectionId}" data-material-id="${m.id}" data-name="${esc(m.nombre)}">${m.tipo==='pdf'?'📄':'📝'} ${esc(m.nombre)}</a>`}</span>
           <span style="display:flex; gap:10px; align-items:center;">
-            ${m.tipo==='pdf'? `<a href="${API_BASE}/api/objetivos-generales/${og.sectionId}/material/${m.id}/download?download=1" class="cell-muted" style="font-size:11.5px;" title="Descargar">${icon('download','icon-sm')}</a>`:''}
             ${isAdmin? `<span class="tag-remove" data-action="del-material-objgen" data-id="${m.id}">${icon('x','icon-sm')}</span>`:''}
           </span>
         </li>`).join('')}</ul>` : `<div class="empty-state" style="padding:16px;">Sin material cargado todavía</div>`}
@@ -4471,6 +4470,7 @@ function attachGlobalEvents(){
         await loadObjetivoGeneral(ui.objGenSectionId); render(); toast('Objetivo general guardado');
       }catch(e){ toast(e.message||'No se pudo guardar', 'red'); }
     }
+    else if(action==='download-material-objgen'){ await downloadAuthFile('/api/objetivos-generales/'+t.getAttribute('data-section-id')+'/material/'+t.getAttribute('data-material-id')+'/download', t.getAttribute('data-name')); }
     else if(action==='del-material-objgen'){
       askConfirm({
         title:'Eliminar material', message:'¿Eliminar este material? Esta acción no se puede deshacer.', confirmLabel:'Eliminar', danger:true,
