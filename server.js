@@ -1287,7 +1287,7 @@ app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
     // El alumno solo ve el Objetivo General de la sección en la que está ahora, nunca el de otras.
     const og = (await whereEquals(OBJETIVOS_GENERALES_COL, 'sectionId', current.sectionId))[0];
     if (og && (og.generalObjective || (og.materials && og.materials.length))) {
-      objetivoGeneralSeccion = { sectionId: current.sectionId, sectionName: og.sectionName, generalObjective: og.generalObjective, materials: (og.materials || []).map(m => ({ id: m.id, tipo: m.tipo, nombre: m.nombre })) };
+      objetivoGeneralSeccion = { sectionId: current.sectionId, sectionName: og.sectionName, generalObjective: og.generalObjective, materials: (og.materials || []).map(m => ({ id: m.id, tipo: m.tipo, nombre: m.nombre, url: m.tipo === 'link' ? m.url : undefined })) };
     }
   }
 
