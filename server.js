@@ -877,30 +877,105 @@ app.put('/api/guidelines', auth, requireRole('admin', 'coordinador'), h(async (r
   res.json({ ok: true });
 }));
 
-// Objetivo General del establecimiento: un enlace de Drive O un archivo PDF/DOC/DOCX. Vale para todo el ciclo lectivo.
-app.put('/api/objetivo-general', auth, requireRole('admin'), upload.single('file'), h(async (req, res) => {
-  let objetivoGeneral;
+// Objetivo General POR SECCIÓN: cada entorno productivo (Pasturas, Agricultura, etc.) tiene su
+// propio objetivo general independiente, con sus propios materiales (PDF/Word/enlaces). Reemplaza
+// el modelo anterior (un solo objetivo general para todo el establecimiento, que no permitía tener
+// más de un material a la vez). Reutiliza el mismo patrón de descarga ya probado en /api/documentos.
+const OBJETIVOS_GENERALES_COL = 'objetivosGenerales';
+async function getOrCreateObjetivoGeneral(sectionId) {
+  const existentes = await whereEquals(OBJETIVOS_GENERALES_COL, 'sectionId', sectionId);
+  if (existentes.length) return existentes[0];
+  const section = await docData('sections', sectionId);
+  if (!section) return null;
+  const id = uid('objgen');
+  const record = { sectionId, sectionName: section.nombre, generalObjective: '', materials: [], updatedAt: new Date().toISOString(), updatedBy: null };
+  await db.collection(OBJETIVOS_GENERALES_COL).doc(id).set(record);
+  return { id, ...record };
+}
+
+app.get('/api/objetivos-generales', auth, blockAlumno, h(async (req, res) => {
+  const sections = await allDocs('sections');
+  const existentes = await allDocs(OBJETIVOS_GENERALES_COL);
+  const bySection = Object.fromEntries(existentes.map(o => [o.sectionId, o]));
+  let list = sections.map(s => bySection[s.id] || { id: null, sectionId: s.id, sectionName: s.nombre, generalObjective: '', materials: [] });
+  if (req.user.role === 'seccion') list = list.filter(o => o.sectionId === req.user.sectionId);
+  res.json({ objetivosGenerales: list });
+}));
+
+app.get('/api/objetivos-generales/:sectionId', auth, blockAlumno, h(async (req, res) => {
+  const o = await getOrCreateObjetivoGeneral(req.params.sectionId);
+  if (!o) return res.status(404).json({ error: 'Sección no encontrada' });
+  res.json(o);
+}));
+
+app.put('/api/objetivos-generales/:sectionId', auth, requireRole('admin'), h(async (req, res) => {
+  const o = await getOrCreateObjetivoGeneral(req.params.sectionId);
+  if (!o) return res.status(404).json({ error: 'Sección no encontrada' });
+  await db.collection(OBJETIVOS_GENERALES_COL).doc(o.id).update({
+    generalObjective: req.body.generalObjective || '', updatedAt: new Date().toISOString(), updatedBy: req.user.nombre
+  });
+  await logActivity(`Se actualizó el Objetivo General de ${o.sectionName}.`);
+  res.json({ ok: true });
+}));
+
+// Agrega UN material (no reemplaza los anteriores). Archivo (PDF/Word) o enlace externo (ej. Drive),
+// nunca los dos a la vez, y un enlace nunca se sube como si fuera un archivo.
+app.post('/api/objetivos-generales/:sectionId/material', auth, requireRole('admin'), upload.single('file'), h(async (req, res) => {
+  const o = await getOrCreateObjetivoGeneral(req.params.sectionId);
+  if (!o) return res.status(404).json({ error: 'Sección no encontrada' });
+
+  let material;
   if (req.file) {
     if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
     const ext = extOf(req.file.originalname);
     if (!['.pdf', '.doc', '.docx'].includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Usá PDF, DOC o DOCX.' });
     const result = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { folder: 'fat-manager/objetivo-general', resource_type: 'raw', public_id: uid('objgen') + ext },
+        { folder: 'fat-manager/objetivos-generales', resource_type: 'raw', public_id: uid('mat') + ext },
         (err, rr) => err ? reject(err) : resolve(rr)
       );
       stream.end(req.file.buffer);
     });
-    objetivoGeneral = { tipo: 'archivo', url: result.secure_url, nombre: req.file.originalname };
-  } else if (req.body.url) {
-    objetivoGeneral = { tipo: 'link', url: req.body.url, nombre: req.body.nombre || 'Enlace de Drive' };
+    material = { id: uid('mat'), tipo: ext === '.pdf' ? 'pdf' : 'word', nombre: req.file.originalname, url: result.secure_url, fecha: new Date().toISOString() };
+  } else if (req.body.url && req.body.url.trim()) {
+    material = { id: uid('mat'), tipo: 'link', nombre: req.body.nombre || 'Enlace', url: req.body.url.trim(), fecha: new Date().toISOString() };
   } else {
-    objetivoGeneral = null;
+    return res.status(400).json({ error: 'Subí un archivo o pegá un enlace' });
   }
-  await db.collection('config').doc('main').update({ objetivoGeneral });
-  await logActivity('Se actualizó el Objetivo General del establecimiento.');
-  res.json({ ok: true, objetivoGeneral });
+
+  const materials = [...(o.materials || []), material];
+  await db.collection(OBJETIVOS_GENERALES_COL).doc(o.id).update({ materials, updatedAt: new Date().toISOString(), updatedBy: req.user.nombre });
+  await logActivity(`Se agregó material al Objetivo General de ${o.sectionName}.`);
+  res.status(201).json({ material });
 }));
+
+app.delete('/api/objetivos-generales/:sectionId/material/:materialId', auth, requireRole('admin'), h(async (req, res) => {
+  const o = await getOrCreateObjetivoGeneral(req.params.sectionId);
+  if (!o) return res.status(404).json({ error: 'Sección no encontrada' });
+  const materials = (o.materials || []).filter(m => m.id !== req.params.materialId);
+  await db.collection(OBJETIVOS_GENERALES_COL).doc(o.id).update({ materials, updatedAt: new Date().toISOString(), updatedBy: req.user.nombre });
+  res.json({ ok: true });
+}));
+
+// Ver/descargar un material — mismo patrón ya probado en /api/documentos/:id/download, así el
+// archivo se abre/descarga con el Content-Type y el nombre correctos (en vez de depender
+// directamente de la URL cruda de Cloudinary, que es donde fallaba antes).
+app.get('/api/objetivos-generales/:sectionId/material/:materialId/download', auth, h(async (req, res) => {
+  const o = await getOrCreateObjetivoGeneral(req.params.sectionId);
+  if (!o) return res.status(404).json({ error: 'Sección no encontrada' });
+  const m = (o.materials || []).find(x => x.id === req.params.materialId);
+  if (!m) return res.status(404).json({ error: 'Material no encontrado' });
+  if (m.tipo === 'link') return res.redirect(m.url);
+  const upstream = await fetch(m.url);
+  if (!upstream.ok) return res.status(502).json({ error: 'No se pudo obtener el archivo desde el almacenamiento' });
+  const ext = extOf(m.nombre);
+  const buffer = Buffer.from(await upstream.arrayBuffer());
+  const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+  res.setHeader('Content-Type', DOC_MIME_TYPES[ext] || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${disposition}; filename="${m.nombre}"; filename*=UTF-8''${encodeURIComponent(m.nombre)}`);
+  res.send(buffer);
+}));
+
 
 app.post('/api/consignas', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
   const id = uid('c');
@@ -1196,6 +1271,7 @@ app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
   }));
 
   let currentDetail = null;
+  let objetivoGeneralSeccion = null;
   if (current) {
     const section = await docData('sections', current.sectionId);
     const teacher = current.teacherId ? await docData('teachers', current.teacherId) : null;
@@ -1205,12 +1281,17 @@ app.get('/api/mi-portal', auth, requireRole('alumno'), h(async (req, res) => {
       plan: current.plan || '', actividades: current.actividades || '', observaciones: current.observaciones || '',
       informesSemanales: current.informesSemanales || [], respuestasAlumno: current.respuestasAlumno || []
     };
+    // El alumno solo ve el Objetivo General de la sección en la que está ahora, nunca el de otras.
+    const og = (await whereEquals(OBJETIVOS_GENERALES_COL, 'sectionId', current.sectionId))[0];
+    if (og && (og.generalObjective || (og.materials && og.materials.length))) {
+      objetivoGeneralSeccion = { sectionId: current.sectionId, sectionName: og.sectionName, generalObjective: og.generalObjective, materials: (og.materials || []).map(m => ({ id: m.id, tipo: m.tipo, nombre: m.nombre })) };
+    }
   }
 
   res.json({
     student: { nombre: student.nombre, apellido: student.apellido, curso: student.curso, division: student.division, legajo: student.legajo, estado: student.estado },
     totalWeeks: config.totalWeeks, semanaActual: student.estado === 'activo' ? currentWeekOf(student, config) : null,
-    lineamientos: config.lineamientos, objetivoGeneral: config.objetivoGeneral || null, consignas, objetivosSemanales,
+    lineamientos: config.lineamientos, objetivoGeneralSeccion, consignas, objetivosSemanales,
     current: currentDetail, rotaciones: rotationsSummary
   });
 }));
