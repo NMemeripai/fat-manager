@@ -2439,7 +2439,7 @@ function renderGuidelines(){
         <li>
           <span><a href="${API_BASE}/api/objetivos-generales/${og.sectionId}/material/${m.id}/download" target="_blank" rel="noopener">${m.tipo==='pdf'?'📄':m.tipo==='word'?'📝':'🔗'} ${esc(m.nombre)}</a></span>
           <span style="display:flex; gap:10px; align-items:center;">
-            ${m.tipo!=='link'? `<a href="${API_BASE}/api/objetivos-generales/${og.sectionId}/material/${m.id}/download?download=1" class="cell-muted" style="font-size:11.5px;">${icon('download','icon-sm')}</a>`:''}
+            ${m.tipo==='pdf'? `<a href="${API_BASE}/api/objetivos-generales/${og.sectionId}/material/${m.id}/download?download=1" class="cell-muted" style="font-size:11.5px;" title="Descargar">${icon('download','icon-sm')}</a>`:''}
             ${isAdmin? `<span class="tag-remove" data-action="del-material-objgen" data-id="${m.id}">${icon('x','icon-sm')}</span>`:''}
           </span>
         </li>`).join('')}</ul>` : `<div class="empty-state" style="padding:16px;">Sin material cargado todavía</div>`}
