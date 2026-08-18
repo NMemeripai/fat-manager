@@ -920,29 +920,13 @@ app.put('/api/objetivos-generales/:sectionId', auth, requireRole('admin'), h(asy
 
 // Agrega UN material (no reemplaza los anteriores). Archivo (PDF/Word) o enlace externo (ej. Drive),
 // nunca los dos a la vez, y un enlace nunca se sube como si fuera un archivo.
-app.post('/api/objetivos-generales/:sectionId/material', auth, requireRole('admin'), upload.single('file'), h(async (req, res) => {
+// Solo enlaces (ej. Google Drive) — se sacó la subida de PDF/Word por pedido explícito.
+app.post('/api/objetivos-generales/:sectionId/material', auth, requireRole('admin'), h(async (req, res) => {
   const o = await getOrCreateObjetivoGeneral(req.params.sectionId);
   if (!o) return res.status(404).json({ error: 'Sección no encontrada' });
+  if (!req.body.url || !req.body.url.trim()) return res.status(400).json({ error: 'Pegá un enlace' });
 
-  let material;
-  if (req.file) {
-    if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
-    const ext = extOf(req.file.originalname);
-    if (!['.pdf', '.doc', '.docx'].includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Usá PDF, DOC o DOCX.' });
-    const result = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        { folder: 'fat-manager/objetivos-generales', resource_type: 'raw', public_id: uid('mat') + ext },
-        (err, rr) => err ? reject(err) : resolve(rr)
-      );
-      stream.end(req.file.buffer);
-    });
-    material = { id: uid('mat'), tipo: ext === '.pdf' ? 'pdf' : 'word', nombre: req.file.originalname, url: result.secure_url, fecha: new Date().toISOString() };
-  } else if (req.body.url && req.body.url.trim()) {
-    material = { id: uid('mat'), tipo: 'link', nombre: req.body.nombre || 'Enlace', url: req.body.url.trim(), fecha: new Date().toISOString() };
-  } else {
-    return res.status(400).json({ error: 'Subí un archivo o pegá un enlace' });
-  }
-
+  const material = { id: uid('mat'), tipo: 'link', nombre: req.body.nombre || 'Enlace', url: req.body.url.trim(), fecha: new Date().toISOString() };
   const materials = [...(o.materials || []), material];
   await db.collection(OBJETIVOS_GENERALES_COL).doc(o.id).update({ materials, updatedAt: new Date().toISOString(), updatedBy: req.user.nombre });
   await logActivity(`Se agregó material al Objetivo General de ${o.sectionName}.`);
