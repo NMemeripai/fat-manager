@@ -871,9 +871,38 @@ app.put('/api/config', auth, requireRole('admin'), h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Pública (sin login): solo el logo, para poder mostrarlo en la propia pantalla de inicio de sesión.
+app.get('/api/branding', h(async (req, res) => {
+  const cfgSnap = await db.collection('config').doc('main').get();
+  const cfg = cfgSnap.data() || {};
+  res.json({ logoUrl: cfg.logoUrl || null });
+}));
+
 app.put('/api/guidelines', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
   await db.collection('config').doc('main').update({ lineamientos: req.body.lineamientos || '' });
   await logActivity('Se publicaron nuevos lineamientos generales.');
+  res.json({ ok: true });
+}));
+
+// Logo de la app: reemplaza la marca "FAT" en el login, la barra lateral y el portal del alumno.
+app.put('/api/logo', auth, requireRole('admin'), upload.single('file'), h(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Subí una imagen' });
+  if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
+  const ext = extOf(req.file.originalname);
+  if (!['.png', '.jpg', '.jpeg', '.svg', '.webp'].includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Usá PNG, JPG, SVG o WEBP.' });
+  const result = await new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: 'fat-manager/logo', resource_type: 'image', public_id: 'logo' },
+      (err, rr) => err ? reject(err) : resolve(rr)
+    );
+    stream.end(req.file.buffer);
+  });
+  await db.collection('config').doc('main').update({ logoUrl: result.secure_url });
+  await logActivity('Se actualizó el logo del sistema.');
+  res.json({ ok: true, logoUrl: result.secure_url });
+}));
+app.delete('/api/logo', auth, requireRole('admin'), h(async (req, res) => {
+  await db.collection('config').doc('main').update({ logoUrl: null });
   res.json({ ok: true });
 }));
 
