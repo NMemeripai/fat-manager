@@ -497,6 +497,13 @@ let SEGUIMIENTO_DETALLE = null; // ficha de seguimiento del alumno seleccionado
 let RD_SUGERIDO_TMP = null; // datos sugeridos mientras el alumno elige el modo (formulario vs archivo), antes de crear el registro
 let NOTIFICACIONES = null; // notificaciones del alumno (aprobación/rechazo/corrección)
 let OBJGEN_ACTUAL = null; // Objetivo General de la sección seleccionada en Lineamientos (admin/profesor)
+let APP_LOGO_URL = null; // logo personalizado del sistema (si el admin cargó uno)
+async function loadBranding(){ const data = await apiFetch('GET', '/api/branding'); APP_LOGO_URL = data.logoUrl; }
+function logoMarkHtml(cls){
+  return APP_LOGO_URL
+    ? `<img src="${APP_LOGO_URL}" class="${cls}" alt="Logo" style="object-fit:contain; background:#fff;">`
+    : `<div class="${cls}">FAT</div>`;
+}
 let spDocsAcumulados = null; // documentos subidos esta semana en "Tu seguimiento" (permite varios, no reemplaza)
 function getSpDocsAcumulados(misRespuestas){
   if(spDocsAcumulados===null){
@@ -623,6 +630,8 @@ const ICON_PATHS = {
   trending:'<polyline points="22.5 6.5 13.5 15.5 8.5 10.5 1.5 17.5"/><polyline points="16.5 6.5 22.5 6.5 22.5 12.5"/>',
   activity:'<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
   paperclip:'<path d="M21 11.5 12.4 20a4.5 4.5 0 0 1-6.4-6.4l9-9a3 3 0 0 1 4.2 4.2l-8.8 8.8a1.5 1.5 0 0 1-2.1-2.1l7.9-7.9"/>',
+  eye:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff:'<path d="M3 3l18 18"/><path d="M10.6 5.2C11 5.1 11.5 5 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.3M6.5 6.6C4 8.3 2 12 2 12s3.6 7 10 7c1.4 0 2.7-.3 3.8-.8"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
 };
 function icon(name, extraCls){
   const p = ICON_PATHS[name] || ICON_PATHS.checkCircle;
@@ -1079,7 +1088,7 @@ function renderStudentPortalPage(){
     <div class="topbar" style="position:sticky; top:0;">
       ${ui.spView!=='home'? `<button class="icon-btn" data-action="sp-go-home" title="Volver" aria-label="Volver al inicio">${icon('arrowLeft','icon-sm')}</button>` : `
       <div class="brand" style="padding:0;">
-        <div class="brand-mark">FAT</div>
+        ${logoMarkHtml('brand-mark')}
         <div><div class="brand-name">Portal del Alumno</div></div>
       </div>`}
       <div class="topbar-spacer"></div>
@@ -1460,7 +1469,7 @@ function renderLogin(err){
   <div class="login-wrap">
     <div class="login-card">
       <div class="login-brand">
-        <div class="login-mark">FAT</div>
+        ${logoMarkHtml('login-mark')}
         <h2 style="font-size:18px;">Gestión de Pasantías FAT</h2>
         <p style="color:var(--text-3);font-size:12.5px;margin-top:4px;">Formación en Ambiente de Trabajo</p>
       </div>
@@ -1471,7 +1480,10 @@ function renderLogin(err){
       </div>
       <div class="field">
         <label for="login-pass">Contraseña</label>
-        <input class="input" type="password" name="password" id="login-pass" autocomplete="current-password">
+        <div style="position:relative;">
+          <input class="input" type="password" name="password" id="login-pass" autocomplete="current-password" style="padding-right:40px; width:100%;">
+          <button type="button" class="icon-btn" id="login-pass-toggle" style="position:absolute; right:3px; top:50%; transform:translateY(-50%); border:none; background:transparent; box-shadow:none; width:32px; height:32px;" title="Mostrar contraseña" aria-label="Mostrar contraseña">${icon('eye','icon-sm')}</button>
+        </div>
       </div>
       <button class="btn btn-primary" style="width:100%; justify-content:center;" type="button" id="login-submit">Iniciar sesión</button>
       <p class="help-text">Backend real: servidor Express con base de datos Firebase Firestore, contraseñas con hash bcrypt y sesión mediante token JWT.</p>
@@ -1494,7 +1506,7 @@ function renderShell(){
   <div class="shell">
     <div class="sidebar ${ui.sidebarOpen?'open':''}">
       <div class="brand">
-        <div class="brand-mark">FAT</div>
+        ${logoMarkHtml('brand-mark')}
         <div>
           <div class="brand-name">FAT Manager</div>
           <div class="brand-sub">Gestión de pasantías</div>
@@ -3675,6 +3687,23 @@ function renderConfig(){
   <div class="page-head"><div><h1 class="page-title">Configuración</h1><p class="page-sub">Parámetros generales del FAT y gestión de personal${isViewAdmin? ' · <span class="badge badge-neutral">Solo lectura</span>':''}</p></div></div>
 
   <div class="section-card">
+    <h3>Logo del sistema</h3>
+    <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+      ${logoMarkHtml('brand-mark')}
+      <div style="flex:1; min-width:200px;">
+        ${!isViewAdmin? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-sm" data-action="logo-agregar">${icon('upload','icon-sm')} ${APP_LOGO_URL?'Reemplazar logo':'Subir logo'}</button>
+          ${APP_LOGO_URL? `<button class="btn btn-sm btn-danger" data-action="logo-quitar">${icon('trash','icon-sm')} Quitar logo</button>`:''}
+        </div>
+        <input type="file" id="logo-file" accept=".png,.jpg,.jpeg,.svg,.webp" style="display:none;">
+        <p class="help-text">Reemplaza la marca "FAT" en el login, la barra lateral y el portal del alumno. PNG, JPG, SVG o WEBP.</p>
+        ` : `<p class="cell-muted" style="font-size:12.5px;">${APP_LOGO_URL?'Logo personalizado cargado.':'Sin logo personalizado, se usa la marca por defecto.'}</p>`}
+      </div>
+    </div>
+  </div>
+
+  <div class="section-card">
     <h3>Duración de la pasantía</h3>
     <div class="kv">
       <dt>Duración total</dt><dd>${c.totalWeeks} semanas</dd>
@@ -4060,6 +4089,17 @@ function render(){
 }
 
 function attachLoginEvents(){
+  const passToggle = document.getElementById('login-pass-toggle');
+  if(passToggle){
+    passToggle.addEventListener('click', ()=>{
+      const passInput = document.getElementById('login-pass');
+      const showing = passInput.type==='text';
+      passInput.type = showing? 'password':'text';
+      passToggle.innerHTML = icon(showing?'eye':'eyeOff','icon-sm');
+      passToggle.title = showing? 'Mostrar contraseña':'Ocultar contraseña';
+      passToggle.setAttribute('aria-label', passToggle.title);
+    });
+  }
   const doLogin = async ()=>{
     const u = document.getElementById('login-user').value;
     const p = document.getElementById('login-pass').value;
@@ -4459,6 +4499,16 @@ function attachGlobalEvents(){
     else if(action==='add-consigna'){ ui.modal={type:'consigna-form', data:null}; render(); }
     else if(action==='new-objetivo-semanal'){ ui.modal={type:'objetivo-semanal-form', data:null}; render(); }
     else if(action==='objgen-agregar-enlace'){ ui.modal={type:'material-link-form', data:null}; render(); }
+    else if(action==='logo-agregar'){ document.getElementById('logo-file').click(); }
+    else if(action==='logo-quitar'){
+      askConfirm({
+        title:'Quitar logo', message:'¿Volver a la marca "FAT" por defecto?', confirmLabel:'Quitar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/logo'); APP_LOGO_URL=null; render(); toast('Logo quitado'); }
+          catch(e){ toast(e.message||'No se pudo quitar el logo','red'); }
+        }
+      });
+    }
     else if(action==='save-objetivo-general'){
       const generalObjective = document.getElementById('objgen-texto').value.trim();
       try{
@@ -4761,6 +4811,22 @@ function attachGlobalEvents(){
       if(!ui.objGenSectionId){ OBJGEN_ACTUAL=null; render(); return; }
       OBJGEN_ACTUAL = null; render();
       loadObjetivoGeneral(ui.objGenSectionId).then(render).catch(e=>{ toast(e.message||'No se pudo cargar','red'); });
+    }
+    else if(t.id==='logo-file'){
+      const f = t.files && t.files[0];
+      if(!f) return;
+      const allowedExt = ['.png','.jpg','.jpeg','.svg','.webp'];
+      const ext = '.'+(f.name.split('.').pop()||'').toLowerCase();
+      if(!allowedExt.includes(ext)){ toast('Formato no permitido','red'); t.value=''; return; }
+      const fd = new FormData(); fd.append('file', f);
+      try{
+        toast('Subiendo logo…');
+        const res = await fetch(API_BASE+'/api/logo', { method:'PUT', headers:{ Authorization:'Bearer '+authToken }, body:fd });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error||'No se pudo subir el logo');
+        APP_LOGO_URL = data.logoUrl;
+        render(); toast('Logo actualizado');
+      }catch(e){ toast(e.message||'No se pudo subir el logo', 'red'); }
     }
     else if(t.matches('[data-action="cron-filtro-grupo"]')){ ui.cronFiltroGrupo = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-seccion"]')){ ui.cronFiltroSeccion = t.value; render(); }
@@ -5355,6 +5421,7 @@ async function exportGradesExcel(){
    INIT
    ========================================================================= */
 async function init(){
+  loadBranding().then(render).catch(()=>{});
   loadSession();
   if(session && authToken){
     try{
