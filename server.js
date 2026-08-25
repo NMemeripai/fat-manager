@@ -871,11 +871,40 @@ app.put('/api/config', auth, requireRole('admin'), h(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// Pública (sin login): solo el logo, para poder mostrarlo en la propia pantalla de inicio de sesión.
+// Pública (sin login): logo y fondo, para poder mostrarlos en la propia pantalla de inicio de sesión.
 app.get('/api/branding', h(async (req, res) => {
   const cfgSnap = await db.collection('config').doc('main').get();
   const cfg = cfgSnap.data() || {};
-  res.json({ logoUrl: cfg.logoUrl || null });
+  res.json({ logoUrl: cfg.logoUrl || null, background: cfg.background || null });
+}));
+
+// Fondo global: color sólido o imagen. Se aplica al login, y a los paneles de profesores y alumnos.
+app.put('/api/background', auth, requireRole('admin'), upload.single('file'), h(async (req, res) => {
+  let background;
+  if (req.file) {
+    if (!CLOUDINARY_READY) return res.status(503).json({ error: 'Cloudinary no está configurado en el servidor.' });
+    const ext = extOf(req.file.originalname);
+    if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) return res.status(400).json({ error: 'Formato no permitido. Usá PNG, JPG o WEBP.' });
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'fat-manager/background', resource_type: 'image', public_id: 'background' },
+        (err, rr) => err ? reject(err) : resolve(rr)
+      );
+      stream.end(req.file.buffer);
+    });
+    background = { tipo: 'imagen', value: result.secure_url };
+  } else if (req.body.color && /^#[0-9a-fA-F]{6}$/.test(req.body.color)) {
+    background = { tipo: 'color', value: req.body.color };
+  } else {
+    return res.status(400).json({ error: 'Subí una imagen o elegí un color válido' });
+  }
+  await db.collection('config').doc('main').update({ background });
+  await logActivity('Se actualizó el fondo del sistema.');
+  res.json({ ok: true, background });
+}));
+app.delete('/api/background', auth, requireRole('admin'), h(async (req, res) => {
+  await db.collection('config').doc('main').update({ background: null });
+  res.json({ ok: true });
 }));
 
 app.put('/api/guidelines', auth, requireRole('admin', 'coordinador'), h(async (req, res) => {
