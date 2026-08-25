@@ -513,10 +513,9 @@ function applyGlobalBackground(){
   const css = APP_BACKGROUND.tipo==='color'
     ? `background:${APP_BACKGROUND.value};`
     : `background:url('${APP_BACKGROUND.value}') center/cover no-repeat fixed;`;
-  // Se aplica a body (paneles de profesor/admin y alumno) y a .login-wrap (login) — las tarjetas
-  // (.card, .section-card, etc.) tienen su propio fondo opaco, así que el texto nunca queda
-  // pisado por la imagen; el fondo solo se ve "detrás" de todo.
-  styleEl.textContent = `body, .login-wrap, .sp-shell{ ${css} background-color:transparent; }`;
+  // Por pedido explícito: el fondo personalizado se ve SOLO en la pantalla de login, no en los
+  // paneles de adentro (admin/profesor/alumno) — por eso acá solo se apunta a .login-wrap.
+  styleEl.textContent = `.login-wrap{ ${css} background-color:transparent; }`;
 }
 function logoMarkHtml(cls){
   return APP_LOGO_URL
@@ -3791,14 +3790,15 @@ function renderConfigPersonalizacion(isViewAdmin){
         </div>
         <input type="file" id="logo-file" accept=".png,.jpg,.jpeg,.svg,.webp" style="display:none;">
         <p class="help-text">Reemplaza la marca "FAT" en el login, la barra lateral y el portal del alumno. PNG, JPG, SVG o WEBP.</p>
+        <p class="help-text"><strong>Medida recomendada:</strong> 512×512 px, cuadrada (se muestra chica, así que se ve nítida en pantallas de alta resolución). Si es PNG, fondo transparente queda mejor.</p>
         ` : `<p class="cell-muted" style="font-size:12.5px;">${APP_LOGO_URL?'Logo personalizado cargado.':'Sin logo personalizado, se usa la marca por defecto.'}</p>`}
       </div>
     </div>
   </div>
 
   <div class="section-card">
-    <h3>Fondo del sistema</h3>
-    <p class="cell-muted" style="font-size:12px; margin-bottom:12px;">Se aplica en la pantalla de inicio de sesión, en el panel de administración/profesores y en el portal del alumno. Las tarjetas y el contenido siempre quedan sobre un fondo blanco, así que el texto nunca pierde legibilidad.</p>
+    <h3>Fondo de la pantalla de inicio de sesión</h3>
+    <p class="cell-muted" style="font-size:12px; margin-bottom:12px;">Se ve únicamente en el login, detrás de la tarjeta de inicio de sesión — no se aplica adentro del sistema (paneles de admin, profesores ni alumnos), así el contenido de trabajo mantiene siempre el mismo fondo claro.</p>
     <div style="display:flex; align-items:center; gap:14px; margin-bottom:14px;">
       <div style="width:64px; height:44px; border-radius:var(--r-sm); border:1px solid var(--border); ${bg&&bg.tipo==='color'?`background:${bg.value};`:bg&&bg.tipo==='imagen'?`background:url('${bg.value}') center/cover;`:'background:var(--surface-2);'}"></div>
       <span class="cell-muted" style="font-size:12.5px;">${bg? (bg.tipo==='color'? 'Color actual: '+bg.value : 'Imagen de fondo cargada') : 'Sin fondo personalizado (por defecto)'}</span>
@@ -3811,6 +3811,7 @@ function renderConfigPersonalizacion(isViewAdmin){
       ${bg? `<button class="btn btn-sm btn-danger" data-action="bg-quitar">${icon('trash','icon-sm')} Quitar fondo</button>`:''}
       <input type="file" id="bg-file" accept=".png,.jpg,.jpeg,.webp" style="display:none;">
     </div>
+    <p class="help-text"><strong>Medida recomendada:</strong> 1920×1080 px (horizontal, formato pantalla completa) o más grande. Se recorta y ajusta para cubrir toda la pantalla, así que evitá que lo importante de la foto esté pegado a los bordes. PNG, JPG o WEBP.</p>
     ` : ''}
   </div>`;
 }
