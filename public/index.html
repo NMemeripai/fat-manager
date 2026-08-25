@@ -656,7 +656,9 @@ async function apiFetch(method, url, body){
   let data = null;
   try{ data = await res.json(); }catch(e){ /* respuesta sin cuerpo */ }
   if(!res.ok){
-    if(res.status===401) throw new Error(handleSessionExpired());
+    // El 401 de /api/auth/login es "usuario o contraseña incorrectos", no una sesión que expiró
+    // (todavía no había ninguna sesión) — antes se mostraba el mensaje de "sesión expirada" por error.
+    if(res.status===401 && url!=='/api/auth/login') throw new Error(handleSessionExpired());
     throw new Error((data && data.error) ? data.error : ('Error del servidor ('+res.status+')'));
   }
   return data;
