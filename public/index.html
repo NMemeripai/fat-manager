@@ -351,6 +351,7 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(35%) sepia(8
 .activity-time{font-size:11px; color:var(--text-3); margin-top:2px;}
 
 .login-wrap{min-height:100vh; display:flex; align-items:center; justify-content:center; background:radial-gradient(1200px 600px at 50% -10%, var(--accent-softer), var(--bg) 60%); padding:20px;}
+.sp-shell{min-height:100vh; background:var(--bg);}
 .login-card{width:100%; max-width:404px; background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:34px; box-shadow:var(--shadow-lg); animation:scaleIn .3s var(--ease);}
 .login-brand{display:flex; flex-direction:column; align-items:center; margin-bottom:24px; text-align:center;}
 .login-mark{width:48px; height:48px; border-radius:14px; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:18px; margin-bottom:12px; box-shadow:0 8px 20px rgba(37,99,235,.28); font-family:'Plus Jakarta Sans',sans-serif;}
@@ -498,7 +499,25 @@ let RD_SUGERIDO_TMP = null; // datos sugeridos mientras el alumno elige el modo 
 let NOTIFICACIONES = null; // notificaciones del alumno (aprobación/rechazo/corrección)
 let OBJGEN_ACTUAL = null; // Objetivo General de la sección seleccionada en Lineamientos (admin/profesor)
 let APP_LOGO_URL = null; // logo personalizado del sistema (si el admin cargó uno)
-async function loadBranding(){ const data = await apiFetch('GET', '/api/branding'); APP_LOGO_URL = data.logoUrl; }
+let APP_BACKGROUND = null; // fondo global personalizado: {tipo:'color'|'imagen', value}
+async function loadBranding(){
+  const data = await apiFetch('GET', '/api/branding');
+  APP_LOGO_URL = data.logoUrl;
+  APP_BACKGROUND = data.background;
+  applyGlobalBackground();
+}
+function applyGlobalBackground(){
+  let styleEl = document.getElementById('custom-bg-style');
+  if(!styleEl){ styleEl = document.createElement('style'); styleEl.id = 'custom-bg-style'; document.head.appendChild(styleEl); }
+  if(!APP_BACKGROUND || !APP_BACKGROUND.tipo){ styleEl.textContent = ''; return; }
+  const css = APP_BACKGROUND.tipo==='color'
+    ? `background:${APP_BACKGROUND.value};`
+    : `background:url('${APP_BACKGROUND.value}') center/cover no-repeat fixed;`;
+  // Se aplica a body (paneles de profesor/admin y alumno) y a .login-wrap (login) — las tarjetas
+  // (.card, .section-card, etc.) tienen su propio fondo opaco, así que el texto nunca queda
+  // pisado por la imagen; el fondo solo se ve "detrás" de todo.
+  styleEl.textContent = `body, .login-wrap, .sp-shell{ ${css} background-color:transparent; }`;
+}
 function logoMarkHtml(cls){
   return APP_LOGO_URL
     ? `<img src="${APP_LOGO_URL}" class="${cls}" alt="Logo" style="object-fit:contain; background:#fff;">`
@@ -562,7 +581,7 @@ let ui = { view:'dashboard', theme:'light', search:'', selectedStudentId:null, m
   sidebarOpen:false, notifOpen:false, userMenuOpen:false, docTab:'mep', docSearch:'', docFilters:{}, plnFilters:{},
   cronFiltroGrupo:'', cronFiltroSeccion:'', cronFiltroCurso:'', actCalMes:todayISO().slice(0,7), cronogramaTab:'semanal',
   spView:'home', rdFecha:todayISO(), rdFilters:{}, rdSort:{key:'fecha',dir:'desc'}, spNotifOpen:false, rdSelected:{}, rdShowTrash:false,
-  segFilters:{}, objGenSectionId:'' };
+  segFilters:{}, objGenSectionId:'', configTab:'general' };
 const PAGE_SIZE = 8;
 
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
@@ -685,6 +704,7 @@ async function loadDB(only){
   const data = await apiFetch('GET', '/api/state' + qs);
   if(!DB || !qs) DB = data;
   else Object.assign(DB, data);
+  if(DB.config && DB.config.background !== undefined){ APP_BACKGROUND = DB.config.background; applyGlobalBackground(); }
 }
 async function loadStudentPortal(){
   SP = await apiFetch('GET', '/api/mi-portal');
@@ -1084,7 +1104,7 @@ function renderStudentPortalPage(){
   if(!SP) return `<div class="login-wrap"><p style="color:var(--text-3);">Cargando…</p></div>`;
   const unread = (NOTIFICACIONES||[]).filter(n=>!n.leida).length;
   return `
-  <div style="min-height:100vh; background:var(--bg);">
+  <div class="sp-shell">
     <div class="topbar" style="position:sticky; top:0;">
       ${ui.spView!=='home'? `<button class="icon-btn" data-action="sp-go-home" title="Volver" aria-label="Volver al inicio">${icon('arrowLeft','icon-sm')}</button>` : `
       <div class="brand" style="padding:0;">
@@ -3685,24 +3705,16 @@ function renderConfig(){
   const isViewAdmin = session.role==='viewadmin';
   return `
   <div class="page-head"><div><h1 class="page-title">Configuración</h1><p class="page-sub">Parámetros generales del FAT y gestión de personal${isViewAdmin? ' · <span class="badge badge-neutral">Solo lectura</span>':''}</p></div></div>
-
-  <div class="section-card">
-    <h3>Logo del sistema</h3>
-    <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
-      ${logoMarkHtml('brand-mark')}
-      <div style="flex:1; min-width:200px;">
-        ${!isViewAdmin? `
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-sm" data-action="logo-agregar">${icon('upload','icon-sm')} ${APP_LOGO_URL?'Reemplazar logo':'Subir logo'}</button>
-          ${APP_LOGO_URL? `<button class="btn btn-sm btn-danger" data-action="logo-quitar">${icon('trash','icon-sm')} Quitar logo</button>`:''}
-        </div>
-        <input type="file" id="logo-file" accept=".png,.jpg,.jpeg,.svg,.webp" style="display:none;">
-        <p class="help-text">Reemplaza la marca "FAT" en el login, la barra lateral y el portal del alumno. PNG, JPG, SVG o WEBP.</p>
-        ` : `<p class="cell-muted" style="font-size:12.5px;">${APP_LOGO_URL?'Logo personalizado cargado.':'Sin logo personalizado, se usa la marca por defecto.'}</p>`}
-      </div>
-    </div>
+  <div class="tabs">
+    <div class="tab ${(ui.configTab||'general')==='general'?'active':''}" data-action="config-tab" data-tab="general">${icon('sliders','icon-sm')} General</div>
+    <div class="tab ${ui.configTab==='personalizacion'?'active':''}" data-action="config-tab" data-tab="personalizacion">${icon('grid','icon-sm')} Personalización</div>
   </div>
+  ${ui.configTab==='personalizacion' ? renderConfigPersonalizacion(isViewAdmin) : renderConfigGeneral(c, groups, isViewAdmin)}
+  `;
+}
 
+function renderConfigGeneral(c, groups, isViewAdmin){
+  return `
   <div class="section-card">
     <h3>Duración de la pasantía</h3>
     <div class="kv">
@@ -3761,6 +3773,45 @@ function renderConfig(){
       <button class="btn" data-action="export-all-excel">${icon('download','icon-sm')} Exportar alumnos a Excel</button>
       <button class="btn" data-action="export-all-pdf">${icon('download','icon-sm')} Exportar informe general a PDF</button>
     </div>
+  </div>`;
+}
+
+function renderConfigPersonalizacion(isViewAdmin){
+  const bg = APP_BACKGROUND;
+  return `
+  <div class="section-card">
+    <h3>Logo del sistema</h3>
+    <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+      ${logoMarkHtml('brand-mark')}
+      <div style="flex:1; min-width:200px;">
+        ${!isViewAdmin? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-sm" data-action="logo-agregar">${icon('upload','icon-sm')} ${APP_LOGO_URL?'Reemplazar logo':'Subir logo'}</button>
+          ${APP_LOGO_URL? `<button class="btn btn-sm btn-danger" data-action="logo-quitar">${icon('trash','icon-sm')} Quitar logo</button>`:''}
+        </div>
+        <input type="file" id="logo-file" accept=".png,.jpg,.jpeg,.svg,.webp" style="display:none;">
+        <p class="help-text">Reemplaza la marca "FAT" en el login, la barra lateral y el portal del alumno. PNG, JPG, SVG o WEBP.</p>
+        ` : `<p class="cell-muted" style="font-size:12.5px;">${APP_LOGO_URL?'Logo personalizado cargado.':'Sin logo personalizado, se usa la marca por defecto.'}</p>`}
+      </div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h3>Fondo del sistema</h3>
+    <p class="cell-muted" style="font-size:12px; margin-bottom:12px;">Se aplica en la pantalla de inicio de sesión, en el panel de administración/profesores y en el portal del alumno. Las tarjetas y el contenido siempre quedan sobre un fondo blanco, así que el texto nunca pierde legibilidad.</p>
+    <div style="display:flex; align-items:center; gap:14px; margin-bottom:14px;">
+      <div style="width:64px; height:44px; border-radius:var(--r-sm); border:1px solid var(--border); ${bg&&bg.tipo==='color'?`background:${bg.value};`:bg&&bg.tipo==='imagen'?`background:url('${bg.value}') center/cover;`:'background:var(--surface-2);'}"></div>
+      <span class="cell-muted" style="font-size:12.5px;">${bg? (bg.tipo==='color'? 'Color actual: '+bg.value : 'Imagen de fondo cargada') : 'Sin fondo personalizado (por defecto)'}</span>
+    </div>
+    ${!isViewAdmin? `
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input type="color" id="bg-color-picker" value="${bg&&bg.tipo==='color'?bg.value:'#2563EB'}" style="width:44px; height:36px; padding:2px; border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer;">
+      <button class="btn btn-sm" data-action="bg-guardar-color">${icon('check','icon-sm')} Usar este color</button>
+      <button class="btn btn-sm" data-action="bg-agregar-imagen">${icon('upload','icon-sm')} Subir imagen</button>
+      ${bg? `<button class="btn btn-sm btn-danger" data-action="bg-quitar">${icon('trash','icon-sm')} Quitar fondo</button>`:''}
+      <input type="file" id="bg-file" accept=".png,.jpg,.jpeg,.webp" style="display:none;">
+    </div>
+    ` : ''}
   </div>`;
 }
 
@@ -4499,6 +4550,7 @@ function attachGlobalEvents(){
     else if(action==='add-consigna'){ ui.modal={type:'consigna-form', data:null}; render(); }
     else if(action==='new-objetivo-semanal'){ ui.modal={type:'objetivo-semanal-form', data:null}; render(); }
     else if(action==='objgen-agregar-enlace'){ ui.modal={type:'material-link-form', data:null}; render(); }
+    else if(action==='config-tab'){ ui.configTab = t.getAttribute('data-tab'); render(); }
     else if(action==='logo-agregar'){ document.getElementById('logo-file').click(); }
     else if(action==='logo-quitar'){
       askConfirm({
@@ -4506,6 +4558,23 @@ function attachGlobalEvents(){
         onConfirm: async ()=>{
           try{ await apiFetch('DELETE','/api/logo'); APP_LOGO_URL=null; render(); toast('Logo quitado'); }
           catch(e){ toast(e.message||'No se pudo quitar el logo','red'); }
+        }
+      });
+    }
+    else if(action==='bg-guardar-color'){
+      const color = document.getElementById('bg-color-picker').value;
+      try{
+        const data = await apiFetch('PUT','/api/background', { color });
+        APP_BACKGROUND = data.background; applyGlobalBackground(); render(); toast('Fondo actualizado');
+      }catch(e){ toast(e.message||'No se pudo guardar el color','red'); }
+    }
+    else if(action==='bg-agregar-imagen'){ document.getElementById('bg-file').click(); }
+    else if(action==='bg-quitar'){
+      askConfirm({
+        title:'Quitar fondo', message:'¿Volver al fondo por defecto?', confirmLabel:'Quitar', danger:true,
+        onConfirm: async ()=>{
+          try{ await apiFetch('DELETE','/api/background'); APP_BACKGROUND=null; applyGlobalBackground(); render(); toast('Fondo quitado'); }
+          catch(e){ toast(e.message||'No se pudo quitar el fondo','red'); }
         }
       });
     }
@@ -4827,6 +4896,22 @@ function attachGlobalEvents(){
         APP_LOGO_URL = data.logoUrl;
         render(); toast('Logo actualizado');
       }catch(e){ toast(e.message||'No se pudo subir el logo', 'red'); }
+    }
+    else if(t.id==='bg-file'){
+      const f = t.files && t.files[0];
+      if(!f) return;
+      const allowedExt = ['.png','.jpg','.jpeg','.webp'];
+      const ext = '.'+(f.name.split('.').pop()||'').toLowerCase();
+      if(!allowedExt.includes(ext)){ toast('Formato no permitido','red'); t.value=''; return; }
+      const fd = new FormData(); fd.append('file', f);
+      try{
+        toast('Subiendo imagen de fondo…');
+        const res = await fetch(API_BASE+'/api/background', { method:'PUT', headers:{ Authorization:'Bearer '+authToken }, body:fd });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error||'No se pudo subir la imagen');
+        APP_BACKGROUND = data.background; applyGlobalBackground();
+        render(); toast('Fondo actualizado');
+      }catch(e){ toast(e.message||'No se pudo subir la imagen', 'red'); }
     }
     else if(t.matches('[data-action="cron-filtro-grupo"]')){ ui.cronFiltroGrupo = t.value; render(); }
     else if(t.matches('[data-action="cron-filtro-seccion"]')){ ui.cronFiltroSeccion = t.value; render(); }
