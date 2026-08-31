@@ -1679,18 +1679,20 @@ app.get('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, r
   if (req.query.fecha) {
     const fecha = String(req.query.fecha);
     const existentes = (await whereEquals(REGISTROS_COL, 'studentId', studentId)).filter(r => !r.deletedAt);
-    const registro = existentes.find(r => r.fecha === fecha) || null;
+    // Ahora puede haber varias planillas en la misma fecha — se devuelven todas, ordenadas por
+    // creación, para que el alumno elija cuál abrir o cree una nueva.
+    const registrosDelDia = existentes.filter(r => r.fecha === fecha).sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
 
     const group = student.groupId ? await docData('groups', student.groupId) : null;
     const rotationsRaw = await whereEquals('rotations', 'studentId', studentId);
     const todayForRot = todayISO();
     const current = rotationsRaw.find(r => todayForRot >= r.startDate && todayForRot <= r.endDate) || null;
     const secciones = (await allDocs('sections')).map(s => ({ id: s.id, nombre: s.nombre }));
-    const sectionIdParaObjetivo = registro ? registro.sectionId : (current ? current.sectionId : null);
+    const sectionIdParaObjetivo = registrosDelDia.length ? registrosDelDia[registrosDelDia.length - 1].sectionId : (current ? current.sectionId : null);
     const objetivosSemanales = await objetivosSemanalesParaAlumno(student, sectionIdParaObjetivo);
 
     return res.json({
-      registro,
+      registros: registrosDelDia.map(r => ({ id: r.id, sectionNombre: r.sectionNombre, modo: r.modo || 'formulario', cantidadActividades: (r.actividades || []).length, estado: r.estado })),
       secciones,
       objetivosSemanales,
       sugerido: {
@@ -1722,10 +1724,6 @@ app.post('/api/mi-portal/registros', auth, requireRole('alumno'), h(async (req, 
   if (!student) return res.status(404).json({ error: 'Alumno no encontrado' });
   const { fecha, sectionId, mep, modo } = req.body || {};
   if (!fecha) return res.status(400).json({ error: 'Falta la fecha' });
-
-  const existentes = (await whereEquals(REGISTROS_COL, 'studentId', studentId)).filter(r => !r.deletedAt);
-  const dupe = existentes.find(r => r.fecha === fecha);
-  if (dupe) return res.status(200).json({ id: dupe.id }); // ya existe: idempotente, devolvemos el mismo
 
   const section = sectionId ? await docData('sections', sectionId) : null;
   const id = uid('reg');
