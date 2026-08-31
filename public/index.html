@@ -753,15 +753,22 @@ function getPlanilla(id){ return (PLANILLAS||[]).find(p=>p.id===id); }
 // Si no existe, guarda los datos sugeridos y pasa a la pantalla de "elegir modo" (formulario vs subir archivo).
 async function openRegistroDiario(fecha){
   const data = await apiFetch('GET', '/api/mi-portal/registros?fecha='+encodeURIComponent(fecha));
-  if(data.registro){
-    const reg = await apiFetch('GET', '/api/mi-portal/registros/'+data.registro.id);
-    reg._secciones = data.secciones; reg._sugerido = data.sugerido; reg._objetivosSemanales = data.objetivosSemanales;
-    RD = reg;
-    ui.spView = RD.modo==='archivo' ? 'archivo-upload' : 'registro';
-  } else {
-    RD_SUGERIDO_TMP = { secciones: data.secciones, sugerido: data.sugerido, fecha, objetivosSemanales: data.objetivosSemanales };
+  RD_SUGERIDO_TMP = { secciones: data.secciones, sugerido: data.sugerido, fecha, objetivosSemanales: data.objetivosSemanales, registrosDelDia: data.registros };
+  if(!data.registros.length){
+    // Todavía no hay ninguna planilla hoy: directo a elegir cómo completarla.
     ui.spView = 'elegir-modo';
+  } else {
+    // Ya hay una o más: mostrar la lista para abrir una existente o crear otra.
+    ui.spView = 'elegir-planilla-dia';
   }
+}
+async function abrirRegistroPorId(id){
+  const reg = await apiFetch('GET', '/api/mi-portal/registros/'+id);
+  reg._secciones = RD_SUGERIDO_TMP ? RD_SUGERIDO_TMP.secciones : [];
+  reg._sugerido = RD_SUGERIDO_TMP ? RD_SUGERIDO_TMP.sugerido : {};
+  reg._objetivosSemanales = RD_SUGERIDO_TMP ? RD_SUGERIDO_TMP.objetivosSemanales : [];
+  RD = reg;
+  ui.spView = RD.modo==='archivo' ? 'archivo-upload' : 'registro';
 }
 async function crearRegistroConModo(modo){
   const { fecha, sugerido, secciones, objetivosSemanales } = RD_SUGERIDO_TMP;
@@ -1119,7 +1126,7 @@ function renderStudentPortalPage(){
     </div>
     ${ui.spNotifOpen? renderSPNotifPanel() : ''}
     <main class="content" style="max-width:760px; margin:0 auto;">
-      ${ui.spView==='elegir-modo'? renderElegirModo() : ui.spView==='archivo-upload'? renderArchivoUpload() : ui.spView==='registro'? renderRegistroDiarioForm() : ui.spView==='historial'? renderMisPlanillasHistorial() : ui.spView==='ayuda'? renderSPAyuda() : renderSPHome()}
+      ${ui.spView==='elegir-planilla-dia'? renderElegirPlanillaDia() : ui.spView==='elegir-modo'? renderElegirModo() : ui.spView==='archivo-upload'? renderArchivoUpload() : ui.spView==='registro'? renderRegistroDiarioForm() : ui.spView==='historial'? renderMisPlanillasHistorial() : ui.spView==='ayuda'? renderSPAyuda() : renderSPHome()}
     </main>
   </div>
   ${ui.modal? renderModal() : ''}
@@ -1374,7 +1381,7 @@ function renderMisPlanillasHistorial(){
       <div class="page-head"><div><h1 class="page-title">Mis Planillas</h1><p class="page-sub">Historial de tus planillas diarias</p></div></div>
       ${RD_LIST===null? `<div class="empty-state"><span class="spinner spinner-accent"></span> Cargando…</div>` :
         (RD_LIST.length? RD_LIST.map(r=>`
-        <div class="card clickable" style="margin-bottom:12px; cursor:pointer;" data-action="sp-open-planilla-historial" data-fecha="${r.fecha}">
+        <div class="card clickable" style="margin-bottom:12px; cursor:pointer;" data-action="sp-open-planilla-historial" data-id="${r.id}">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
             <div>
               <div style="font-weight:700; font-size:14px;">${fmtDate(r.fecha)}</div>
@@ -1402,6 +1409,28 @@ function renderSPNotifPanel(){
 }
 
 /* ---------------------------- Elegir modo: formulario vs subir planilla ya hecha ---------------------------- */
+/* ---------------------------- Planillas de hoy: elegir cuál abrir o crear otra ---------------------------- */
+function renderElegirPlanillaDia(){
+  const tmp = RD_SUGERIDO_TMP;
+  const registros = tmp ? tmp.registrosDelDia : [];
+  return `
+      <div class="page-head"><div><h1 class="page-title">Planillas de hoy</h1><p class="page-sub">${fmtDate(tmp?tmp.fecha:todayISO())} · ya cargaste ${registros.length} planilla${registros.length===1?'':'s'}</p></div></div>
+
+      ${registros.map((r,i)=>`
+        <div class="card clickable" style="margin-bottom:12px; cursor:pointer;" data-action="sp-abrir-planilla-dia" data-id="${r.id}">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+            <div>
+              <div style="font-weight:700; font-size:14px;">Planilla ${i+1}${r.sectionNombre? ' — '+esc(r.sectionNombre) : ''}</div>
+              <div class="cell-muted" style="font-size:12.5px; margin-top:2px;">${r.modo==='archivo'? 'Subida como archivo' : r.cantidadActividades+' actividad'+(r.cantidadActividades===1?'':'es')+' cargada'+(r.cantidadActividades===1?'':'s')}</div>
+            </div>
+            ${registroEstadoBadge(r.estado)}
+          </div>
+        </div>`).join('')}
+
+      <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:6px;" data-action="sp-crear-otra-planilla">${icon('plus','icon-sm')} Crear otra planilla de hoy</button>
+  `;
+}
+
 function renderElegirModo(){
   return `
       <div class="page-head"><div><h1 class="page-title">Planilla diaria</h1><p class="page-sub">${fmtDate(RD_SUGERIDO_TMP? RD_SUGERIDO_TMP.fecha : todayISO())} · ¿Cómo querés completarla?</p></div></div>
@@ -4315,9 +4344,14 @@ function attachGlobalEvents(){
     }
     else if(action==='sp-open-ayuda'){ ui.spView='ayuda'; render(); }
     else if(action==='sp-open-planilla-historial'){
-      ui.rdFecha = t.getAttribute('data-fecha'); ui.spView='registro'; RD=null; render();
-      openRegistroDiario(ui.rdFecha).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
+      ui.spView='registro'; RD=null; render();
+      abrirRegistroPorId(t.getAttribute('data-id')).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
     }
+    else if(action==='sp-abrir-planilla-dia'){
+      ui.spView='registro'; RD=null; render();
+      abrirRegistroPorId(t.getAttribute('data-id')).then(render).catch(e=>{ toast(e.message||'No se pudo cargar la planilla','red'); ui.spView='home'; render(); });
+    }
+    else if(action==='sp-crear-otra-planilla'){ ui.spView='elegir-modo'; render(); }
     else if(action==='sp-elegir-modo'){
       const modo = t.getAttribute('data-modo');
       try{ await crearRegistroConModo(modo); render(); }
