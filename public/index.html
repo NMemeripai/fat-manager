@@ -2789,7 +2789,10 @@ function renderCronogramaSemanalBody(){
           <span class="cron-legend-swatch" style="background:${sectionColor(s.id)};"></span>${esc(s.nombre)}
         </div>`).join('')}
     </div>
-    <button class="btn btn-sm" data-action="cron-ir-semana-actual" title="Ir a la semana actual">${icon('arrowLeft','icon-sm')} Semana actual ${icon('arrowRight','icon-sm')}</button>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      ${isAdmin? `<button class="btn btn-sm btn-primary" data-action="cron-bulk-open" title="Cargar la misma rotación a todos los alumnos de uno o varios grupos">${icon('users','icon-sm')} Cargar por grupo</button>`:''}
+      <button class="btn btn-sm" data-action="cron-ir-semana-actual" title="Ir a la semana actual">${icon('arrowLeft','icon-sm')} Semana actual ${icon('arrowRight','icon-sm')}</button>
+    </div>
   </div>
   <div class="table-wrap" id="cron-scroll-wrap" style="overflow-x:auto;">
     <table class="cron-table">
@@ -3170,6 +3173,34 @@ function cronogramaAddFormHtml(data){
   <div class="field"><label for="f-cronadd-empresa">Empresa</label><input class="input" id="f-cronadd-empresa" placeholder="Nombre de la empresa (opcional)"></div>
   <div class="field"><label for="f-cronadd-observaciones">Observaciones</label><textarea class="input" id="f-cronadd-observaciones" placeholder="Notas sobre esta rotación"></textarea></div>
   <p class="help-text">Se creó con las fechas de esta semana como referencia; podés ajustarlas para que abarque el período real que necesites.</p>
+  `;
+}
+
+function cronogramaBulkFormHtml(){
+  const groups = DB.groups||[];
+  const countOf = g => DB.students.filter(s=>s.groupId===g.id && (s.estado==='activo'||s.estado==='pausado')).length;
+  const hoy = todayISO();
+  return `
+  <div class="field"><label>Grupos (se aplica a todos sus alumnos activos)</label>
+    ${groups.length? `<div style="display:flex; flex-direction:column; gap:6px; max-height:180px; overflow:auto; padding:8px; border:1px solid var(--border); border-radius:8px;">
+      ${groups.map(g=>`<label style="display:flex; gap:8px; align-items:center; font-weight:400;"><input type="checkbox" class="f-bulk-grupo" value="${g.id}"> ${esc(g.nombre)} <span class="help-text" style="margin:0;">· ${countOf(g)} alumno${countOf(g)===1?'':'s'}</span></label>`).join('')}
+    </div>` : `<p class="help-text">Todavía no hay grupos. Asignale un grupo a los alumnos desde "Editar rotación".</p>`}
+  </div>
+  <div class="field-row">
+    <div class="field"><label for="f-bulk-seccion">Sección</label>
+      <select class="select" id="f-bulk-seccion" style="width:100%;">${DB.sections.map(s=>`<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label for="f-bulk-tutor">Tutor / Profesor</label>
+      <select class="select" id="f-bulk-tutor" style="width:100%;"><option value="">Usar el de la sección</option>${DB.teachers.filter(t=>t.rol==='seccion').map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('')}</select>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field"><label for="f-bulk-inicio">Fecha de inicio</label><input class="input" type="date" id="f-bulk-inicio" value="${hoy}"></div>
+    <div class="field"><label for="f-bulk-fin">Fecha de fin</label><input class="input" type="date" id="f-bulk-fin" value="${hoy}"></div>
+  </div>
+  <div class="field"><label for="f-bulk-empresa">Empresa</label><input class="input" id="f-bulk-empresa" placeholder="Nombre de la empresa (opcional)"></div>
+  <div class="field"><label for="f-bulk-observaciones">Observaciones</label><textarea class="input" id="f-bulk-observaciones" placeholder="Notas para todas estas rotaciones"></textarea></div>
+  <p class="help-text">Se crea una rotación por alumno. Si un alumno ya tiene una rotación en esa misma sección que se superpone con las fechas, se omite para no duplicar.</p>
   `;
 }
 
@@ -3869,6 +3900,7 @@ function renderModal(){
   else if(m.type==='criterio-form'){ title = m.data? 'Editar criterio':'Nuevo criterio'; body = `<div class="field"><label for="f-criterio-nombre">Nombre del criterio</label><input class="input" id="f-criterio-nombre" value="${m.data?esc(m.data.nombre):''}" placeholder="ej. Puntualidad"></div>`; }
   else if(m.type==='cronograma-edit-form'){ title='Editar rotación en el cronograma'; body = cronogramaEditFormHtml(m.data); }
   else if(m.type==='cronograma-add-form'){ title='Nueva rotación'; body = cronogramaAddFormHtml(m.data); }
+  else if(m.type==='cronograma-bulk-form'){ title='Cargar rotación por grupo'; body = cronogramaBulkFormHtml(); }
   else if(m.type==='usuario-form'){ title = m.data? 'Editar VIEW ADMIN':'Nuevo VIEW ADMIN'; body = usuarioFormHtml(m.data); }
   else if(m.type==='comunicado-form'){ title='Nuevo lineamiento'; wide=true; body = comunicadoFormHtml(); }
   else if(m.type==='comunicado-detalle'){ title='Estado de lectura'; wide=true; body = comunicadoDetalleHtml(m.data); }
@@ -4783,6 +4815,7 @@ function attachGlobalEvents(){
     else if(action==='tour-next'){ tourStep = (tourStep||0)+1; render(); }
     else if(action==='tour-back'){ tourStep = Math.max(0,(tourStep||0)-1); render(); }
     else if(action==='tour-skip'){ marcarTourVisto(); tourStep = null; render(); }
+    else if(action==='cron-bulk-open'){ ui.modal={type:'cronograma-bulk-form', data:null}; render(); }
     else if(action==='cron-ir-semana-actual'){ scrollCronogramaASemana(semanaActualCronograma(), true); }
     else if(action==='cronograma-tab'){ ui.cronogramaTab = t.getAttribute('data-tab'); render(); }
     else if(action==='act-cal-nav'){ ui.actCalMes = actAddMonths(ui.actCalMes, t.getAttribute('data-dir')==='next'?1:-1); render(); }
@@ -5424,6 +5457,18 @@ async function submitModal(action, type, id){
       if(startDate>endDate){ toast('La fecha de inicio no puede ser posterior a la de fin','red'); return; }
       await apiFetch('POST', '/api/rotations', { studentId:data.studentId, sectionId, teacherId, startDate, endDate, empresa, observaciones });
       await loadDB(['rotations','activityLog']); ui.modal=null; render(); toast('Rotación creada');
+    }
+    else if(type==='cronograma-bulk-form'){
+      const groupIds = [...document.querySelectorAll('.f-bulk-grupo:checked')].map(c=>c.value);
+      const sectionId = val('f-bulk-seccion'); const teacherId = val('f-bulk-tutor')||undefined;
+      const startDate = val('f-bulk-inicio'); const endDate = val('f-bulk-fin');
+      const empresa = val('f-bulk-empresa'); const observaciones = val('f-bulk-observaciones');
+      if(!groupIds.length){ toast('Elegí al menos un grupo','red'); return; }
+      if(!startDate || !endDate){ toast('Completá las fechas','red'); return; }
+      if(startDate>endDate){ toast('La fecha de inicio no puede ser posterior a la de fin','red'); return; }
+      const r = await apiFetch('POST', '/api/rotations/bulk', { groupIds, sectionId, teacherId, startDate, endDate, empresa, observaciones });
+      await loadDB(['rotations','activityLog']); ui.modal=null; render();
+      toast(`Se crearon ${r.creadas} rotaciones`+(r.omitidos&&r.omitidos.length? ` · ${r.omitidos.length} omitidas por superposición (${r.omitidos.slice(0,3).join(', ')}${r.omitidos.length>3?'…':''})`:''));
     }
     else if(type==='usuario-form'){
       const nombre = val('f-usu-nombre'); const username = val('f-usu-username'); const password = val('f-usu-password');
