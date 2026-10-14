@@ -598,6 +598,42 @@ app.post('/api/rotations', auth, requireRole('admin'), h(async (req, res) => {
   res.status(201).json({ id, ...record });
 }));
 
+/* Carga de rotación en bloque: misma rotación para todos los alumnos de uno o varios grupos */
+app.post('/api/rotations/bulk', auth, requireRole('admin'), h(async (req, res) => {
+  const { groupIds, sectionId, startDate, endDate, teacherId, empresa, observaciones } = req.body || {};
+  if (!Array.isArray(groupIds) || !groupIds.length) return res.status(400).json({ error: 'Elegí al menos un grupo' });
+  if (!sectionId || !startDate || !endDate) return res.status(400).json({ error: 'Faltan sección o fechas' });
+  if (startDate > endDate) return res.status(400).json({ error: 'La fecha de inicio no puede ser posterior a la de fin' });
+  const section = await docData('sections', sectionId);
+  if (!section) return res.status(400).json({ error: 'La sección elegida no existe' });
+  const students = (await allDocs('students')).filter(s => groupIds.includes(s.groupId) && (s.estado === 'activo' || s.estado === 'pausado'));
+  if (!students.length) return res.status(400).json({ error: 'Los grupos elegidos no tienen alumnos activos' });
+  const allRots = await allDocs('rotations');
+  const byStudent = {};
+  allRots.forEach(r => { (byStudent[r.studentId] = byStudent[r.studentId] || []).push(r); });
+  const finalTeacher = teacherId ? teacherId : (section.teacherId || null);
+  let creadas = 0; const omitidos = [];
+  let batch = db.batch(); let ops = 0;
+  for (const st of students) {
+    const rots = byStudent[st.id] || [];
+    const dup = rots.some(r => r.sectionId === sectionId && r.startDate <= endDate && r.endDate >= startDate);
+    if (dup) { omitidos.push(`${st.nombre} ${st.apellido}`); continue; }
+    const maxOrden = rots.reduce((m, r) => Math.max(m, r.orden || 0), 0);
+    const id = uid('rot');
+    batch.set(db.collection('rotations').doc(id), {
+      studentId: st.id, sectionId, orden: maxOrden + 1, startDate, endDate,
+      teacherId: finalTeacher, status: 'pendiente', plan: '', actividades: '', observaciones: observaciones || '',
+      empresa: empresa || '', informesSemanales: [], informeFinal: '', calificacion: null,
+      comentarios: '', attachmentName: null, attachmentUrl: null, respuestasAlumno: []
+    });
+    creadas++; ops++;
+    if (ops >= 400) { await batch.commit(); batch = db.batch(); ops = 0; }
+  }
+  if (ops) await batch.commit();
+  await logActivity(`Carga en bloque: se crearon ${creadas} rotaciones en ${section.nombre} (${startDate} a ${endDate})${omitidos.length ? `, ${omitidos.length} omitidas por superposición` : ''}.`);
+  res.status(201).json({ ok: true, creadas, omitidos });
+}));
+
 app.delete('/api/rotations/:id', auth, requireRole('admin'), h(async (req, res) => {
   const r = await docData('rotations', req.params.id);
   if (!r) return res.status(404).json({ error: 'Rotación no encontrada' });
